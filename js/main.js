@@ -21,7 +21,7 @@ import { setupSceneCulling, updateSceneCulling } from './scene-culling.js';
 import { CityAudioSystem } from './audio-system.js';
 
 // js/main.js
-// Main entry point for New York City (Midtown Manhattan) in Three.js WebGPURenderer & TSL (three.js dev, see index.html)
+// Main entry point for Utrecht in Three.js WebGPURenderer & TSL (three.js dev, see index.html)
 
 async function initApp() {
   const container = document.getElementById('canvas-container');
@@ -37,7 +37,7 @@ async function initApp() {
   };
 
   if (loadingStatus) {
-    loadingStatus.textContent = `Initializing Three.js r${THREE.REVISION} WebGPURenderer & TSL Shaders...`;
+    loadingStatus.textContent = 'Getting the city ready…';
   }
 
   // 1. Initialize Three.js WebGPURenderer with 32-bit float reversedDepthBuffer
@@ -63,6 +63,9 @@ async function initApp() {
 
   await renderer.init();
   markInit('renderer');
+  console.info(`[renderer] Three.js r${THREE.REVISION}; ${renderer.backend.isWebGPUBackend ? 'WebGPU' : 'WebGL fallback'}`);
+  container.dataset.renderer = renderer.backend.isWebGPUBackend ? 'WebGPU' : 'WebGL fallback';
+  container.dataset.threeRevision = THREE.REVISION;
 
   // 2. Build Scene & Physical Atmospheric Sky / PMREM IBL / 4096x4096 Shadow Lighting
   const scene = new THREE.Scene();
@@ -70,7 +73,7 @@ async function initApp() {
   markInit('lighting');
 
   if (loadingStatus) {
-    loadingStatus.textContent = 'Constructing Manhattan Grid, Landmarks & Streetscape...';
+    loadingStatus.textContent = 'Opening the streets…';
   }
 
   // 3. Build Manhattan Geography, Iconic Landmarks, Blocks, Street Details & Traffic
@@ -103,7 +106,7 @@ async function initApp() {
   const controllerManager = new ThirdPersonControllerManager(scene, allColliders);
   // Reuse teleport placement so saved players return at rest, close to their last positions.
   try {
-    const saved = JSON.parse(localStorage.getItem('nyc-player-state'));
+    const saved = JSON.parse(localStorage.getItem('slopwaw-player-state'));
     if (saved?.version === 1) {
       for (const mode of Object.keys(controllerManager.entities)) {
         const p = saved.entities?.[mode];
@@ -120,7 +123,7 @@ async function initApp() {
       const entities = Object.fromEntries(Object.entries(controllerManager.entities).map(([mode, entity]) => [mode, {
         x: entity.position.x, y: entity.position.y, z: entity.position.z, heading: entity.heading
       }]));
-      localStorage.setItem('nyc-player-state', JSON.stringify({ version: 1, activeMode: controllerManager.activeMode, entities }));
+      localStorage.setItem('slopwaw-player-state', JSON.stringify({ version: 1, activeMode: controllerManager.activeMode, entities }));
     } catch { /* Storage may be disabled or full. */ }
   }
 
@@ -150,7 +153,7 @@ async function initApp() {
 
   // Island-wide static geometry: chunk & distance-cull the small props, shadow stand-ins for the big casters
   // (scene-culling.js)
-  const cullingRoots = ['ManhattanCityGrid', 'ManhattanCityBlocks', 'ManhattanStreetDetails', 'ManhattanLandmarks', 'Boroughs']
+  const cullingRoots = ['BerlinMitteCityGrid', 'BerlinMitteCityBlocks', 'BerlinStreetDetails', 'ManhattanLandmarks', 'BerlinBoundaryContext']
     .map((name) => scene.getObjectByName(name))
     .filter(Boolean);
   setupSceneCulling(scene, cullingRoots, lightingSystem.sunLight.shadow);
@@ -245,8 +248,8 @@ async function initApp() {
     cyclist: [[['W', 'S'], 'Pedal / Brake'], [['A', 'D'], 'Lean & Turn'], [['Shift'], 'Sprint'], [['Drag'], 'Orbit']],
     helicopter: [[['W', 'S'], 'Pitch'], [['A', 'D'], 'Yaw'], [['Space', 'E'], 'Ascend'], [['Q', 'C'], 'Descend'], [['Shift'], 'Boost']]
   };
-  // Boosted top speeds in mph (controllers.js caps them at 8.2, 36, 19 & 52 m/s): full scale of the speed meter
-  const topSpeedMph = { person: 18, car: 81, cyclist: 43, helicopter: 116 };
+  // Boosted top speeds in km/h (controllers.js caps them at 8.2, 36, 19 & 52 m/s): full scale of the speed meter
+  const topSpeedKmh = { person: 30, car: 130, cyclist: 69, helicopter: 188 };
 
   function renderControlHints(mode) {
     if (!elControlsHint) return;
@@ -558,7 +561,7 @@ async function initApp() {
   // The loading screen stays up while the shaders compile (precompileShaders() & the warm-up frame, see the loop) and
   // until the first frame is on screen
   if (loadingStatus) {
-    loadingStatus.textContent = 'Compiling Shaders & Render Pipelines...';
+    loadingStatus.textContent = 'Bringing Utrecht to life…';
   }
 
   // 6b. Shader pre-compilation behind the loading screen. compileAsync() builds the node graphs in slices and has the GPU
@@ -628,7 +631,8 @@ async function initApp() {
         for (const object of job) await compile(object);
         done++;
         if (loadingStatus) {
-          loadingStatus.textContent = `Compiling Shaders & Render Pipelines... ${Math.round((done / jobs.length) * 100)}%`;
+          const message = done < jobs.length * 0.75 ? 'Bringing Utrecht to life…' : 'Your ride is almost ready…';
+          if (loadingStatus.textContent !== message) loadingStatus.textContent = message;
         }
         setLoadingProgress(done / jobs.length);
       }
@@ -715,6 +719,22 @@ async function initApp() {
       Promise.resolve(device && device.queue.onSubmittedWorkDone()).catch(() => {}).then(() => {
         markInit('gpu');
         console.log(`[init] ${initTimings.join(', ')}`);
+        // Spike test hooks (tools/probe.mjs, evidence screenshots)
+        window.__slopwaw = {
+          ready: true, firstFrameAt: performance.now(), init: initTimings.join(', '),
+          backend: renderer.backend.isWebGPUBackend ? 'WebGPU' : 'WebGL fallback',
+          scene, renderer, cameraSystem, controllerManager, TELEPORT_LOCATIONS,
+          teleport(key) { const l = TELEPORT_LOCATIONS[key]; return teleportTo(l.x, l.z, l.heading); },
+          teleportXZ(x, z, heading = 0) { return teleportTo(x, z, heading); },
+          mode(m) { selectMode(m); },
+          camera(id) { selectCamera(id, true); },
+          time(id) { selectTime(id); },
+          setCamera(px, py, pz, tx, ty, tz) {
+            cameraSystem.fixedPos = new THREE.Vector3(px, py, pz); cameraSystem.fixedLook = new THREE.Vector3(tx, ty, tz);
+            selectCamera('fixed', true);
+          },
+          info() { return renderer.info ? { calls: renderer.info.render.calls, triangles: renderer.info.render.triangles } : null; },
+        };
         initTimings = null;
         if (loadingOverlay) loadingOverlay.classList.add('hidden');
         audioSystem.ready = true;
@@ -733,17 +753,17 @@ async function initApp() {
 
       const activeEnt = controllerManager.getActiveEntity();
       const mode = controllerManager.activeMode;
-      const mph = Math.round(Math.abs(activeEnt.speed) * 2.237);
-      const altFt = Math.max(0, Math.round(activeEnt.position.y * 3.281));
+      const kmh = Math.round(Math.abs(activeEnt.speed) * 3.6);
+      const altitudeM = Math.max(0, Math.round(activeEnt.position.y));
 
       if (elFps) {
         elFps.textContent = String(currentFps);
         elFps.className = currentFps >= 50 ? 'fps-ok' : currentFps >= 30 ? 'fps-warn' : 'fps-bad';
       }
-      if (elSpeed) elSpeed.textContent = String(mph);
-      if (elSpeedMeter) elSpeedMeter.style.transform = `scaleX(${Math.min(1, mph / (topSpeedMph[mode] || 80))})`;
-      document.body.classList.toggle('is-boosting', controllerManager.keys.boost && mph > 0);
-      if (elAltitude) elAltitude.textContent = altFt.toLocaleString('en-US');
+      if (elSpeed) elSpeed.textContent = String(kmh);
+      if (elSpeedMeter) elSpeedMeter.style.transform = `scaleX(${Math.min(1, kmh / (topSpeedKmh[mode] || 80))})`;
+      document.body.classList.toggle('is-boosting', controllerManager.keys.boost && kmh > 0);
+      if (elAltitude) elAltitude.textContent = altitudeM.toLocaleString('de-DE');
       // The street corner of the player on the follow cameras, of the camera itself on the scenic ones
       const where = cameraSystem.getActivePreset().category === 'follow' ? activeEnt.position : cameraSystem.currentPos;
       renderLocation(getLocationLabel(where.x, where.z));
@@ -751,4 +771,14 @@ async function initApp() {
   });
 }
 
-initApp();
+initApp().catch((error) => {
+  console.error(error);
+  const status = document.getElementById('loading-status');
+  if (status) status.textContent = 'Utrecht couldn’t open this time. Please try again.';
+  document.getElementById('loading-overlay')?.classList.add('has-error');
+  const retry = document.getElementById('loading-retry');
+  if (retry) {
+    retry.hidden = false;
+    retry.addEventListener('click', () => window.location.reload());
+  }
+});

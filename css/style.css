@@ -198,6 +198,21 @@ body::after {
   font-size: 21px;
 }
 
+.brand-logo {
+  height: 30px;
+  width: auto;
+  flex: none;
+  object-fit: contain;
+}
+
+.loader-logo {
+  height: 72px;
+  width: auto;
+  max-width: 220px;
+  margin-bottom: 22px;
+  object-fit: contain;
+}
+
 .loader-title {
   font-size: 34px;
   font-weight: 650;

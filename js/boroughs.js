@@ -51,6 +51,11 @@ import {
   streetZ
 } from './city-config.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { BERLIN_DATA, ISLAND_BOUNDS, waterAt } from './city-config.js';
+
+// Retain the upstream surrounding-city renderer as an isolated module factory.
+// Its New York raster initializers must not execute against Berlin's data.
+function legacyNewYorkBoroughModule() {
 
 // js/boroughs.js
 // The rest of New York City around the simulated Manhattan grid, at true 1:1 scale on the real geography (1 unit = 1 m,
@@ -3388,4 +3393,22 @@ function buildBoroughs(scene, { sidewalks = [] } = {}) {
   return { group, ridgeHeightAt, landAt, colliders: bridgeSite.colliders.concat(tram.colliders), update: tram.update };
 }
 
-export { buildBoroughs, ridgeHeightAt, landAt as boroughLandAt };
+  return { buildBoroughs, ridgeHeightAt, boroughLandAt: landAt };
+}
+
+function ridgeHeightAt() { return 0; }
+function boroughLandAt(x, z) {
+  if (waterAt(x, z)) return null;
+  return { id: 'berlin', name: 'Utrecht', top: 0, bounds: ISLAND_BOUNDS };
+}
+function buildBoroughs(scene) {
+  // The Mitte test uses the complete mapped area in city-grid/buildings. Do not
+  // fabricate New York borough skylines or islands outside that survey.
+  const group = new THREE.Group();
+  group.name = 'BerlinBoundaryContext';
+  group.userData = { city: 'Berlin', coverage: BERLIN_DATA.meta.geographicBounds, boundaryContext: 'Mitte survey' };
+  scene.add(group);
+  return { group, ridgeHeightAt, landAt: boroughLandAt, colliders: [], update() {} };
+}
+
+export { buildBoroughs, ridgeHeightAt, boroughLandAt };

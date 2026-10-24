@@ -25,23 +25,23 @@ import {
   EAST_RIVER_BRIDGES,
   OUTER_BRIDGES,
   getLocationLabel,
-  isTypingInField
+  isTypingInField,
+  waterAt,
+  blockAt,
+  nearestDrivingPoint
 } from './city-config.js';
 
 // js/nyc-map.js
-// GTA 6-Style Live Radar Minimap + Full-Screen Interactive New York City Cartographic Atlas.
-// Synchronized 1:1 with the 3D world (1 unit = 1 m; x = Manhattan-grid east, z = grid south, so both maps are drawn
-// "grid north up", the way Manhattan's street map is read, 29° east of true north). They draw the very geography the
-// city is built from (GEO, from NYC Open Data & OpenStreetMap): Manhattan's bulkhead line and piers, every
-// curb island (block) with the building footprints standing on it, the parks, Central Park's meadows, water bodies &
-// drives, the shore highways, the real street centrelines (labelled along their course), the surrounding boroughs and
-// New Jersey, the harbour islands and the bridges.
+// Original live radar and full-screen cartographic atlas, with mapped Berlin layers.
+// 1 unit = 1 metre; x east, z south. True north is up. Geometry is the same
+// OpenStreetMap snapshot used by the original WebGPU engine's Berlin adapters.
+// NYCMapSystem remains the public class name to preserve upstream interfaces.
 
 const FONT = 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-const MIN_ZOOM = 0.015; // full map, pixels per metre: the whole harbour, Staten Island to the Bronx
+const MIN_ZOOM = Math.min(0.06, 280 / (ISLAND_BOUNDS.maxX - ISLAND_BOUNDS.minX), 260 / (ISLAND_BOUNDS.maxZ - ISLAND_BOUNDS.minZ));
 const MAX_ZOOM = 3.0; // single lots
 const RADAR_SCALE = 0.32; // radar pixels per metre on the ground (zooms out with altitude)
-const GRID_BEARING = (GEO.frame && GEO.frame.bearingDeg) || 29.02; // Manhattan's grid north, degrees east of true north
+const GRID_BEARING = (GEO.frame && GEO.frame.bearingDeg) ?? 0; // Berlin axes follow true north
 
 // Map palette, shared by the radar & the atlas (in step with css/style.css): graphite ground with the streets a shade
 // lighter than the blocks they run between, muted parks & water; a taxi-yellow GPS route, white landmarks & player,
@@ -71,40 +71,29 @@ const MAP = {
   mainRoads: '#3a434f',
   highway: '#b27a35',
   bridge: '#c08a3e',
+  ringbahn: '#a88963',
   route: '#ffc21a',
   search: '#5fd0ff',
   halo: 'rgba(8, 11, 15, 0.9)'
 };
 
 // Landmarks modelled by landmarks.js on their real OpenStreetMap lots (outlined in amber)
-const MODELLED_LANDMARKS = [
-  'Empire State Building', 'Chrysler Building', 'One Vanderbilt', 'Grand Central Terminal', 'MetLife Building',
-  'Stephen A. Schwarzman Building', 'One Times Square', '30 Rockefeller Plaza', 'Citigroup Center', 'Seagram Building',
-  'Flatiron Building', 'One World Trade Center', 'New York Stock Exchange'
-];
+const MODELLED_LANDMARKS = (NYC_LANDMARKS || []).map(l => l.name);
 
-// Borough (0), waterway (1) & neighbourhood (2) names at their real places (world metres)
+// Neighbourhood, waterway and park labels in the same metre frame (origin at the Domtoren).
 const AREA_LABELS = [
-  ['MANHATTAN', 120, -1500, 0], ['NEW JERSEY', -7000, 2000, 0], ['BROOKLYN', 7850, 8780, 0], ['QUEENS', 8810, -1680, 0],
-  ['THE BRONX', 1010, -9640, 0], ['STATEN ISLAND', -1800, 19220, 0],
-  ['HUDSON RIVER', -2680, -300, 1], ['HUDSON RIVER', -2650, -5600, 1], ['EAST RIVER', 1700, 800, 1],
-  ['HARLEM RIVER', 220, -7930, 1], ['UPPER NEW YORK BAY', 130, 10530, 1],
-  ['HARLEM', -320, -6750, 2], ['MORNINGSIDE HEIGHTS', -1600, -6160, 2], ['EAST HARLEM', 830, -5820, 2],
-  ['UPPER WEST SIDE', -1410, -3070, 2], ['CENTRAL PARK', -430, -3280, 2], ['UPPER EAST SIDE', 590, -2680, 2],
-  ['ROOSEVELT ISLAND', 1810, -2030, 2], ["HELL'S KITCHEN", -1350, -590, 2], ['MIDTOWN', 100, -500, 2],
-  ['MURRAY HILL', 680, 330, 2], ['HUDSON YARDS', -1510, 770, 2], ['CHELSEA', -1030, 1650, 2],
-  ['FLATIRON · GRAMERCY', 330, 1660, 2], ['GREENWICH VILLAGE', -540, 2830, 2], ['EAST VILLAGE', 1250, 2800, 2],
-  ['SOHO', 200, 3560, 2], ['LOWER EAST SIDE', 1690, 3760, 2], ['TRIBECA', -140, 4460, 2], ['CHINATOWN', 850, 4420, 2],
-  ['BATTERY PARK CITY', -370, 5540, 2], ['FINANCIAL DISTRICT', 455, 5715, 2], ['GOVERNORS ISLAND', 795, 7685, 2],
-  ['LIBERTY ISLAND', -1234, 8849, 2], ['ELLIS ISLAND', -1427, 7648, 2], ["RANDALL'S ISLAND", 2268, -6301, 2],
-  ['WASHINGTON HEIGHTS', -1690, -10270, 2], ['DOWNTOWN BROOKLYN', 2570, 6280, 2], ['WILLIAMSBURG', 3670, 2980, 2],
-  ['GREENPOINT', 3305, 1277, 2], ['LONG ISLAND CITY', 2865, -473, 2], ['ASTORIA', 3345, -3699, 2],
-  ['HOBOKEN', -3293, 3032, 2], ['JERSEY CITY', -2671, 6014, 2], ['WEEHAWKEN', -3670, 193, 2], ['FORT LEE', -4456, -9911, 2],
-  ['RED HOOK', 2005, 8855, 2], ['BAYONNE', -5284, 13699, 2]
+ ['BINNENSTAD',200,-100,0],['OUDEGRACHT',-60,-80,1],['SINGEL',-420,-520,1],
+ ['STATIONSGEBIED',-1000,-100,0],['WITTEVROUWEN',500,-850,0],['MUSEUMKWARTIER',500,700,0],
+ ['WILHELMINAPARK',500,1250,2]
 ];
+// New neighbourhood labels follow their actual clipped district geometry.
+for (const area of GEO.berlin?.meta.areas || []) {
+  if (!area.labelPoint || area.areaKm2 < 0.15 || ['mitte','kreuzberg','friedrichshain','charlottenburg','tiergarten'].includes(area.id)) continue;
+  AREA_LABELS.push([area.name.toLocaleUpperCase('de-DE'), ...area.labelPoint, 0]);
+}
 
 // Shorter map names for a few real street names
-const LABEL_ALIAS = { 'Franklin D Roosevelt Dr': 'FDR Drive', 'Battery Park Underpass': 'Battery Underpass' };
+const LABEL_ALIAS = {};
 
 // ---------------------------------------------------------------------------------------------------------------------
 // World-space vector layers: built once into Path2D objects (world metres) and drawn through a canvas transform
@@ -152,6 +141,16 @@ function addRing(path, pts) {
   path.closePath();
 }
 
+function addHole(path, pts) {
+  if (!pts || pts.length < 3) return;
+  const {n,X,Z}=accessor(pts); if(n<3)return;
+  let a=0;for(let i=0,j=n-1;i<n;j=i++)a+=X(j)*Z(i)-X(i)*Z(j);
+  const indices=Array.from({length:n},(_,i)=>a<0?i:n-1-i);
+  path.moveTo(X(indices[0]),Z(indices[0]));
+  for(const i of indices.slice(1))path.lineTo(X(i),Z(i));
+  path.closePath();
+}
+
 function addLine(path, pts) {
   if (!pts || pts.length < 2) return;
   const { n, X, Z } = accessor(pts);
@@ -188,6 +187,12 @@ class TiledLayer {
 
   ring(pts) {
     if (pts && pts.length > 2) addRing(this.pathFor(boundsOf(pts)), pts);
+  }
+
+  polygon(pts, holes=[]) {
+    if (!pts || pts.length<3)return;
+    const path=this.pathFor(boundsOf(pts));addRing(path,pts);
+    for(const hole of holes)addHole(path,hole);
   }
 
   line(pts) {
@@ -233,10 +238,10 @@ function mapLayers() {
   // Parkland (NYC Parks properties), the curb islands (blocks: raised sidewalks & lots) and the park blocks, exactly
   // as city-grid.js / buildings.js treat them
   L.parkLand = new TiledLayer();
-  for (const park of GEO.parks || []) for (const ring of park.rings || []) L.parkLand.ring(ring);
+  for (const park of GEO.parks || []) for (const ring of park.rings || []) L.parkLand.polygon(ring,park.holes||[]);
   L.blocks = new TiledLayer();
   L.parkBlocks = new TiledLayer();
-  for (const b of BLOCKS) (b.park > 0.6 && !b.median ? L.parkBlocks : L.blocks).ring(b.poly);
+  for (const b of BLOCKS) (b.park > 0.6 && !b.median ? L.parkBlocks : L.blocks).polygon(b.poly,b.holes||[]);
 
   // Central Park: meadows, water bodies, the drives and the sunken transverse roads
   const cp = GEO.centralPark || {};
@@ -244,7 +249,7 @@ function mapLayers() {
   L.cpLawns = new Path2D();
   for (const l of cp.lawns || []) addRing(L.cpLawns, l.ring);
   L.cpWater = new Path2D();
-  for (const w of cp.water || []) addRing(L.cpWater, w.ring);
+  for (const w of cp.water || []) { addRing(L.cpWater, w.ring); for(const hole of w.holes||[])addHole(L.cpWater,hole); }
   L.cpDrives = new Path2D();
   L.cpTransverses = new Path2D();
   for (const d of cp.drives || []) addLine(d.transverse ? L.cpTransverses : L.cpDrives, d.pts);
@@ -259,12 +264,37 @@ function mapLayers() {
     } else if (r.w >= 15) L.mainRoads.line(r.pts);
   }
 
+  // Actual irregular Berlin road surfaces, with bridge decks drawn over the Spree.
+  L.airfields=[];
+  for (const feature of GEO.berlin?.aeroways || []) {
+    const path = new Path2D(), polygon = Boolean(feature.ring?.length);
+    if (polygon) {
+      addRing(path, feature.ring);
+      for (const hole of feature.holes || []) addRing(path, hole);
+    } else if (feature.pts?.length) addLine(path, feature.pts);
+    L.airfields.push({ path, polygon, width: feature.width || (feature.kind === 'runway' ? 45 : 15) });
+  }
+  L.berlinRoads=[]; L.berlinBridges=[];
+  if (GEO.city === 'Utrecht') {
+    const widths=new Map();
+    for(const r of ROADS){
+      const pedestrian=['footway','path','pedestrian','steps','cycleway'].includes(r.kind);
+      const key=`${r.bridge?'bridge':'road'}:${r.w}:${pedestrian}`;
+      let item=widths.get(key);
+      if(!item){item={path:new Path2D(),width:r.w,pedestrian};widths.set(key,item);(r.bridge?L.berlinBridges:L.berlinRoads).push(item);}
+      addLine(item.path,r.pts);
+    }
+  }
+
   // Landmark lots
   L.landmarks = new Path2D();
   for (const name of MODELLED_LANDMARKS) {
     const s = LANDMARK_SITES[name];
     if (s && s.ring) addRing(L.landmarks, s.ring);
   }
+
+  L.ringbahn = new Path2D();
+  for (const polygon of GEO.berlin?.meta.ringbahn?.polygons || []) addRing(L.ringbahn, polygon.ring);
 
   // Bridges, Manhattan landing to the far landing, deck width to scale
   L.bridges = [...EAST_RIVER_BRIDGES, ...OUTER_BRIDGES].map((br) => {
@@ -287,7 +317,7 @@ function footprintLayers(all) {
   for (const blk of all) {
     for (const f of blk.footprints || []) {
       const layer = tones[f.h > 95 ? 2 : f.h > 45 ? 1 : 0];
-      if (f.pts) layer.ring(f.pts); // turned to follow a non-grid street
+      if (f.pts) layer.polygon(f.pts,f.holes||[]); // turned to follow a non-grid street
       else layer.rect(f.x0, f.z0, f.x1, f.z1);
     }
   }
@@ -399,14 +429,50 @@ function drawPlayerArrow(ctx, tipY, halfWidth, tailY) {
   ctx.fill();
 }
 
+// The original GPS styling now follows Berlin's directed OSM road graph.
+let ROUTING=null;
+let ROUTE_CACHE=null;
+function getBerlinMapRoute(x0,z0,x1,z1){
+  const graph=GEO.roadGraph;
+  if(GEO.city !== 'Utrecht'||!graph)return null;
+  if(!ROUTING){
+    const points=[];for(let i=0;i<graph.nodes.length;i+=2)points.push({x:graph.nodes[i],z:graph.nodes[i+1]});
+    const adjacency=points.map(()=>[]);
+    for(const [a,b,,width,,dir,inner] of graph.links){
+      const shape=[points[a]];for(let i=0;i<inner.length;i+=2)shape.push({x:inner[i],z:inner[i+1]});shape.push(points[b]);
+      let distance=0;for(let i=1;i<shape.length;i++)distance+=Math.hypot(shape[i].x-shape[i-1].x,shape[i].z-shape[i-1].z);
+      if(dir>=0)adjacency[a].push({to:b,distance,shape});
+      if(dir<=0)adjacency[b].push({to:a,distance,shape:[...shape].reverse()});
+    }
+    ROUTING={points,adjacency};
+  }
+  const {points,adjacency}=ROUTING;
+  const nearest=(x,z)=>{let best=0,d=Infinity;for(let i=0;i<points.length;i++){const q=points[i],dd=(q.x-x)**2+(q.z-z)**2;if(dd<d){d=dd;best=i;}}return best;};
+  const from=nearest(x0,z0),to=nearest(x1,z1),key=from+':'+to;
+  if(!ROUTE_CACHE||ROUTE_CACHE.key!==key){
+    const distance=new Float64Array(points.length).fill(Infinity),previous=new Array(points.length),heap=[];
+    const push=(id,cost)=>{let i=heap.length;heap.push([id,cost]);while(i){const p=(i-1)>>1;if(heap[p][1]<=cost)break;heap[i]=heap[p];i=p;}heap[i]=[id,cost];};
+    const pop=()=>{const result=heap[0],last=heap.pop();if(heap.length){let i=0;while(i*2+1<heap.length){let j=i*2+1;if(j+1<heap.length&&heap[j+1][1]<heap[j][1])j++;if(heap[j][1]>=last[1])break;heap[i]=heap[j];i=j;}heap[i]=last;}return result;};
+    distance[from]=0;push(from,0);
+    while(heap.length){const [id,cost]=pop();if(cost!==distance[id])continue;if(id===to)break;
+      for(const edge of adjacency[id]){const next=cost+edge.distance;if(next<distance[edge.to]){distance[edge.to]=next;previous[edge.to]={from:id,edge};push(edge.to,next);}}
+    }
+    const chain=[];let at=to;
+    while(at!==from&&previous[at]){chain.push(previous[at].edge.shape);at=previous[at].from;}
+    const route=at===from?chain.reverse().flatMap((shape,i)=>i?shape.slice(1):shape):[];
+    ROUTE_CACHE={key,route};
+  }
+  return [{x:x0,z:z0},...ROUTE_CACHE.route,{x:x1,z:z1}];
+}
+
 // GPS route from the player to the waypoint, along the grid (x first, then z): taxi yellow on a dark casing
-function drawRoute(ctx, x0, y0, x1, y1, width) {
+function drawRoute(ctx, x0, y0, x1, y1, width, points=null) {
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
   ctx.beginPath();
   ctx.moveTo(x0, y0);
-  ctx.lineTo(x1, y0);
-  ctx.lineTo(x1, y1);
+  if(points){for(const p of points)ctx.lineTo(p.x,p.z);}
+  else {ctx.lineTo(x1,y0);ctx.lineTo(x1,y1);}
   ctx.strokeStyle = MAP.halo;
   ctx.lineWidth = width + 3;
   ctx.stroke();
@@ -450,6 +516,8 @@ class NYCMapSystem {
     this.miniCache = null; // { canvas, cx, cz, s, version }: the radar's ground layers, twice the radar's size
     const elCounts = document.getElementById('fullmap-counts');
     if (elCounts) elCounts.textContent = `${ROAD_NAME_COUNT} streets · ${BLOCKS.length.toLocaleString('en-US')} blocks`;
+    const ringLegend = document.getElementById('ringbahn-legend');
+    if (ringLegend) ringLegend.hidden = !GEO.berlin?.meta.ringbahn;
 
     // The map is drawn grid north up; the compass needle points to true north, 29° to its left
     const needle = document.getElementById('map-compass-needle');
@@ -481,9 +549,9 @@ class NYCMapSystem {
     this.searchHighlight = '';
     this.searchPath = null;
     this.textWidths = new Map();
-    // Default GTA 6-style active GPS waypoint (Times Square / Broadway)
-    const ts = NYC_LANDMARKS.find((l) => l.id === 'timessquare') || { x: 0, z: 0 };
-    this.waypoint = { x: ts.x, z: ts.z, name: 'Times Square & 42nd St' };
+    // Start with Berlin's central landmark as the active GPS waypoint.
+    const ts = NYC_LANDMARKS.find((l) => l.id === 'pkin') || { x: 0, z: 0 };
+    this.waypoint = { x: ts.x, z: ts.z, name: ts.name || 'PKiN' };
 
     // Street names measured before the web font arrived would be spaced for the fallback font: measure & draw again
     if (document.fonts) {
@@ -535,7 +603,7 @@ class NYCMapSystem {
     }
     if (fullIslandBtn) {
       fullIslandBtn.addEventListener('click', () => {
-        // Fits all of Manhattan, from the Harlem River to the Battery
+        // Fits all mapped districts, including on narrow screens.
         const b = ISLAND_BOUNDS;
         const { w, h } = this.fullSize();
         this.viewCenterX = (b.minX + b.maxX) * 0.5;
@@ -618,7 +686,7 @@ class NYCMapSystem {
             if (this.onTeleport) {
               this.onTeleport(wPos.x, wPos.z);
             }
-            this.renderFullMap();
+            this.toggleFullMap(false);
           }
         }
       });
@@ -743,7 +811,15 @@ class NYCMapSystem {
   clampToManhattan(p) {
     const z = Math.max(ISLAND_BOUNDS.minZ + 25, Math.min(ISLAND_BOUNDS.maxZ - 25, p.z));
     const shore = getIslandBoundsAtZ(z);
-    return { x: Math.max(shore.westX + 12, Math.min(shore.eastX - 12, p.x)), z };
+    const result={ x: Math.max(shore.westX + 12, Math.min(shore.eastX - 12, p.x)), z };
+    if(GEO.city === 'Utrecht'){
+      const block=blockAt(result.x,result.z);
+      if(waterAt(result.x,result.z)||(block&&!block.sidewalk&&!block.park)){
+        const road=nearestDrivingPoint(result.x,result.z);
+        if(road)return {x:road.x,z:road.z};
+      }
+    }
+    return result;
   }
 
   textWidth(ctx, text) {
@@ -785,7 +861,7 @@ class NYCMapSystem {
     // 2. Piers, then Manhattan (roadway deck colour: the streets are the gaps between the blocks) in its bulkhead line
     ctx.fillStyle = MAP.piers;
     ctx.fill(L.piers);
-    ctx.fillStyle = MAP.streets;
+    ctx.fillStyle = GEO.city === 'Utrecht' ? MAP.land : MAP.streets;
     ctx.fill(L.manhattan);
     ctx.strokeStyle = MAP.shore;
     ctx.lineWidth = px(isMinimap ? 1.6 : 2.0);
@@ -809,7 +885,15 @@ class NYCMapSystem {
       L.parkBlocks.each(v, (p) => ctx.stroke(p));
     }
 
-    // 4. Central Park: meadows, drives & transverses, water bodies
+    ctx.fillStyle = MAP.streets;
+    ctx.strokeStyle = MAP.streets;
+    for (const field of L.airfields) {
+      if (field.polygon) ctx.fill(field.path, 'evenodd');
+      else { ctx.lineWidth = Math.max(field.width, px(0.5)); ctx.stroke(field.path); }
+    }
+    for(const r of L.berlinRoads){ctx.strokeStyle=r.pedestrian?MAP.blockEdge:MAP.streets;ctx.lineWidth=Math.max(r.width,px(.5));ctx.stroke(r.path);}
+
+    // 4. Mapped park water bodies and the Spree
     if (v.sees(L.cpBounds)) {
       ctx.fillStyle = MAP.lawn;
       ctx.fill(L.cpLawns);
@@ -825,6 +909,8 @@ class NYCMapSystem {
       ctx.lineWidth = px(1);
       ctx.stroke(L.cpWater);
     }
+
+    for(const r of L.berlinBridges){ctx.strokeStyle=MAP.streets;ctx.lineWidth=r.width;ctx.stroke(r.path);}
 
     // 5. Building footprints, lowest first
     if (s >= 0.18) {
@@ -873,6 +959,18 @@ class NYCMapSystem {
       ctx.stroke(br.path);
     }
     ctx.lineCap = 'round';
+
+    // The actual railway loop makes the expansion boundary visible at city scale.
+    if (!isMinimap && GEO.berlin?.meta.ringbahn) {
+      ctx.strokeStyle = MAP.halo;
+      ctx.lineWidth = px(4);
+      ctx.stroke(L.ringbahn);
+      ctx.strokeStyle = MAP.ringbahn;
+      ctx.lineWidth = px(1.5);
+      ctx.setLineDash([px(7), px(4)]);
+      ctx.stroke(L.ringbahn);
+      ctx.setLineDash([]);
+    }
 
     // 10. Search highlight: every stretch of the matching streets
     if (this.searchPath && !isMinimap) {
@@ -1048,7 +1146,8 @@ class NYCMapSystem {
     if (this.waypoint) {
       const wx = toX(this.waypoint.x);
       const wy = toY(this.waypoint.z);
-      drawRoute(ctx, 0, 0, wx, wy, 3);
+      const route=getBerlinMapRoute(px,pz,this.waypoint.x,this.waypoint.z);
+      drawRoute(ctx, 0, 0, wx, wy, 3,route&&route.map(p=>({x:toX(p.x),z:toY(p.z)})));
       drawWaypoint(ctx, wx, wy, 4.5);
     }
 
@@ -1138,7 +1237,8 @@ class NYCMapSystem {
     if (this.waypoint) {
       const wx = toX(this.waypoint.x);
       const wy = toY(this.waypoint.z);
-      drawRoute(ctx, toX(ent.position.x), toY(ent.position.z), wx, wy, 4);
+      const route=getBerlinMapRoute(ent.position.x,ent.position.z,this.waypoint.x,this.waypoint.z);
+      drawRoute(ctx, toX(ent.position.x), toY(ent.position.z), wx, wy, 4,route&&route.map(p=>({x:toX(p.x),z:toY(p.z)})));
       drawWaypoint(ctx, wx, wy, 7);
     }
 
@@ -1200,7 +1300,7 @@ class NYCMapSystem {
     ctx.textBaseline = 'middle';
     const tracking = 'letterSpacing' in ctx;
     for (const [label, x, z, kind] of AREA_LABELS) {
-      if (kind === 0 && s > 0.07) continue;
+      if (kind === 0 && s > (GEO.city === 'Utrecht' ? 0.16 : 0.07)) continue;
       if (kind === 2 && (s < 0.035 || s > 1.2)) continue;
       const dx = toX(x);
       const dy = toY(z);
@@ -1219,10 +1319,16 @@ class NYCMapSystem {
         if (tracking) ctx.letterSpacing = '1.8px';
       }
       const half = this.textWidth(ctx, label) * 0.5 + 4;
-      const box = [dx - half, dy - 8, dx + half, dy + 8];
-      if (overlaps(placed, box)) continue;
-      placed.push(box);
-      ctx.fillText(label, dx, dy);
+      // District representative points often coincide with a destination pin.
+      // Try a small screen-space offset so the city overview keeps both labels.
+      const offsets = kind === 0 ? [0, -24, 24, -42, 42] : [0];
+      for (const offset of offsets) {
+        const labelY = dy + offset, box = [dx - half, labelY - 8, dx + half, labelY + 8];
+        if (box[0] < -w * 0.48 || box[2] > w * 0.48 || Math.abs(labelY) > h * 0.47 || overlaps(placed, box)) continue;
+        placed.push(box);
+        ctx.fillText(label, dx, labelY);
+        break;
+      }
     }
     if (tracking) ctx.letterSpacing = '0px';
     ctx.textBaseline = 'alphabetic';
@@ -1287,4 +1393,4 @@ class NYCMapSystem {
   }
 }
 
-export { NYCMapSystem };
+export { NYCMapSystem, getBerlinMapRoute };

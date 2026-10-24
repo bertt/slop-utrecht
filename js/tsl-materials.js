@@ -59,10 +59,8 @@ import {
 import {
   CENTRAL_PARK_BOUNDS,
   ISLAND_BOUNDS,
-  getIslandBoundsAtZ,
-  NJ_SHORELINE_POLYGON,
-  LONG_ISLAND_POLYGONS,
-  streetZ
+  BERLIN_DATA,
+  waterAt
 } from './city-config.js';
 
 // js/tsl-materials.js
@@ -447,7 +445,11 @@ function facadeCell(windowWidth, floorHeight, boxLocal, cornerPier = 0) {
   }
 
   const vCoord = positionWorld.y;
-  const gridV = vCoord.div(floorHeight);
+  // Mapped floor height is computed once per instance, instead of dividing
+  // building height by the storey count for every facade pixel.
+  const mappedFloorHeight = boxLocal ? attribute('facadeAppearance', 'vec4').w : float(0.0);
+  const effectiveFloorHeight = boxLocal ? mix(float(floorHeight), mappedFloorHeight, step(0.00001, mappedFloorHeight)) : float(floorHeight);
+  const gridV = vCoord.div(effectiveFloorHeight);
   const cellId = vec2(floor(gridU), floor(gridV));
   const cellUV = vec2(fract(gridU), fract(gridV));
   const fw = vec2(fwidth(gridU), fwidth(gridV));
@@ -467,8 +469,8 @@ function facadeCell(windowWidth, floorHeight, boxLocal, cornerPier = 0) {
   let coping = float(0.0);
   if (boxLocal) {
     const top = vCoord.add(fromTop);
-    const floorBase = floor(gridV).mul(floorHeight);
-    const whole = step(top.sub(wallH).sub(0.05), floorBase).mul(step(floorBase.add(floorHeight), top.add(0.05)));
+    const floorBase = floor(gridV).mul(effectiveFloorHeight);
+    const whole = step(top.sub(wallH).sub(0.05), floorBase).mul(step(floorBase.add(effectiveFloorHeight), top.add(0.05)));
     partial = float(1.0).sub(whole).mul(wall);
     coping = float(1.0).sub(step(0.32, fromTop)).mul(wall);
   }
@@ -711,7 +713,9 @@ function createPreWarBuildingMaterial(opts = {}) {
   });
 
   // The style's parameters are uniforms (not baked-in constants), so every masonry style compiles to one shader
-  const cStone = uniform(new THREE.Color(stoneColor));
+  const defaultStone = uniform(new THREE.Color(stoneColor));
+  const facadeAppearance = boxLocal ? attribute('facadeAppearance', 'vec4') : null;
+  const cStone = boxLocal ? mix(defaultStone, facadeAppearance.xyz, step(0.0, facadeAppearance.x)) : defaultStone;
   const cTrim = uniform(new THREE.Color(trimColor));
   const cGlass = uniform(new THREE.Color(windowGlassColor));
   const cCrown = uniform(new THREE.Color(crownGlowColor));
@@ -1076,6 +1080,8 @@ function createFacadeBoxes(material, boxes) {
   const faces = new THREE.InstancedBufferAttribute(new Float32Array(boxes.length * 4), 4);
   geometry.setAttribute('box', box);
   geometry.setAttribute('faces', faces);
+  const appearance = new THREE.InstancedBufferAttribute(new Float32Array(boxes.length * 4), 4);
+  geometry.setAttribute('facadeAppearance', appearance);
 
   const mesh = new THREE.InstancedMesh(geometry, material, boxes.length);
   const matrix = new THREE.Matrix4();
@@ -1088,6 +1094,8 @@ function createFacadeBoxes(material, boxes) {
     else mesh.setMatrixAt(i, matrix.makeScale(b.w, b.h, b.d).setPosition(b.x, b.y, b.z));
     box.setXYZW(i, b.w, b.h, b.d, ((i * 29) % 1000) + 0.1 + 0.8 * (b.tone ?? 0.5));
     if (b.faces) faces.setXYZW(i, b.faces[0], b.faces[1], b.faces[2], b.faces[3]);
+    const c = b.facadeColour;
+    appearance.setXYZW(i, c?.r ?? -1, c?.g ?? -1, c?.b ?? -1, b.facadeLevels > 0 ? b.h / b.facadeLevels : 0);
   });
   return mesh;
 }
@@ -2437,8 +2445,67 @@ const waterBoxCover = Fn(([x, a, b, s]) => {
   return clamp(min(xv.add(sv), b).sub(max(xv.sub(sv), a)).div(sv.mul(2.0)), 0.0, 1.0);
 });
 
+// Analytic night-reflection proxies follow the actual Spree/Spree Canal banks.
+// Simplification is CPU-only and cached; 64 segments bound fragment-shader cost.
+// Adjacent OSM water polygons often share internal edges, so test both sides and
+// retain only real land/water boundaries. Nearby OSM roofs supply Berlin heights.
+let _berlinReflectionBanks = null;
+function getBerlinReflectionBanks() {
+  if (_berlinReflectionBanks) return _berlinReflectionBanks;
+  const simplify = (points, tolerance) => {
+    if (points.length < 3) return points;
+    const a = points[0], b = points[points.length - 1];
+    const dx = b[0] - a[0], dz = b[1] - a[1], length2 = dx * dx + dz * dz;
+    let farthest = -1, maximum = tolerance * tolerance;
+    for (let i = 1; i < points.length - 1; i++) {
+      const q = points[i];
+      const t = length2 ? Math.max(0, Math.min(1, ((q[0] - a[0]) * dx + (q[1] - a[1]) * dz) / length2)) : 0;
+      const distance2 = (q[0] - a[0] - dx * t) ** 2 + (q[1] - a[1] - dz * t) ** 2;
+      if (distance2 > maximum) { maximum = distance2; farthest = i; }
+    }
+    return farthest < 0 ? [a, b] : [...simplify(points.slice(0, farthest + 1), tolerance).slice(0, -1), ...simplify(points.slice(farthest), tolerance)];
+  };
+  const banks = [];
+  for (const water of BERLIN_DATA.water) for (const outline of [water.ring, ...(water.holes || [])]) {
+    const points = [];
+    for (let i = 0; i < outline.length; i += 2) points.push([outline[i], outline[i + 1]]);
+    if (points.length < 3) continue;
+    const ring = simplify([...points, points[0]], 12);
+    for (let i = 1; i < ring.length; i++) {
+      const a = ring[i - 1], b = ring[i];
+      const dx = b[0] - a[0], dz = b[1] - a[1], length = Math.hypot(dx, dz);
+      if (length < 25) continue;
+      const x = (a[0] + b[0]) / 2, z = (a[1] + b[1]) / 2;
+      const nx = -dz / length * 8, nz = dx / length * 8;
+      if (waterAt(x + nx, z + nz) === waterAt(x - nx, z - nz)) continue;
+      banks.push({ a, b, length, x, z });
+    }
+  }
+  banks.sort((a, b) => b.length - a.length);
+  const buildings = BERLIN_DATA.buildings.filter(b => !b.part && b.h > 5 && b.h < 160).map(b => {
+    let x = 0, z = 0;
+    for (let i = 0; i < b.ring.length; i += 2) { x += b.ring[i]; z += b.ring[i + 1]; }
+    const points = b.ring.length / 2;
+    return { x: x / points, z: z / points, h: b.h + (b.roofHeight || 0) };
+  });
+  _berlinReflectionBanks = banks.slice(0, 64).map(bank => {
+    let total = 0, weight = 0;
+    for (const building of buildings) {
+      const distance = Math.hypot(building.x - bank.x, building.z - bank.z);
+      if (distance > 190) continue;
+      const w = 1 / Math.max(20, distance);
+      total += building.h * w; weight += w;
+    }
+    // The retained procedural lots average 0.63 of S; compensate to match the
+    // measured local roofline rather than generating a Manhattan-scale skyline.
+    const skyline = Math.min(145, Math.max(15, (weight ? total / weight : 22) / 0.63));
+    return [...bank.a, ...bank.b, Math.round(skyline * 10) / 10];
+  });
+  return _berlinReflectionBanks;
+}
+
 /**
- * Hudson River, East River, Upper Bay & Central Park Lakes: Physically Based Estuary Water TSL Material
+ * Berlin Spree, Spree Canal & park ponds: Physically Based Water TSL Material
  * - Wave normals (normalNode) from 4 rotated, scaled & drifting samples of the LEAN wave texture whose energy follows
  *   slowly drifting wind patches; the slope variance below each pixel footprint (plus always-unresolved capillary
  *   ripples) becomes GGX roughness, so crisp chop near the piers turns into a soft glitter path towards the horizon
@@ -2447,7 +2514,7 @@ const waterBoxCover = Fn(([x, a, b, s]) => {
  *   (F0 = 0.02): it hands the transmitted share to the body colour and weights the pipeline's SSR, so reflections come
  *   only from the sky IBL, the sun's GGX specular and SSR (no painted-in glint).
  * - Night: the lit skyline & far shores sit beyond SSR's reach, so an analytic city (lots, lit windows, storefronts &
- *   riverside lamps on Manhattan's shoreline, the NJ / Queens / Brooklyn waterfronts & Central Park's rim) is reflected
+ *   riverside lamps on the real Spree/Spree Canal banks, with nearby OSM building heights) is reflected
  *   through the same wave normals & Fresnel, blurred by the unresolved slopes into the familiar vertical light streaks.
  * - Park lakes, the Reservoir & fountains (well above the harbour) get finer, calmer ripples and a greener, duller body.
  */
@@ -2459,7 +2526,8 @@ function createWaterMaterial() {
 
   const waveTex = getWaterWaveTexture();
   const harbourY = ISLAND_BOUNDS ? ISLAND_BOUNDS.waterLevel : -2.2;
-  const pond = smoothstep(harbourY + 1.0, harbourY + 2.0, positionWorld.y);
+  // Keep Berlin's existing water colour and wave mix when lowering its surface.
+  const pond = smoothstep(harbourY + 1.0, harbourY + 2.0, BERLIN_DATA ? float(-0.65) : positionWorld.y);
 
   // [tile size (m), rotation (rad), RMS slope]: incommensurate scales & angles so no pattern repeats
   const LAYERS = [
@@ -2522,65 +2590,12 @@ function createWaterMaterial() {
     return mix(body, lake, pond).mul(crestTint);
   })();
 
-  // Night: the lit city seen along the reflected ray. Manhattan is a stack of boxes roughly inscribed in its shoreline;
-  // across the rivers stand the NJ & Queens / Brooklyn waterfronts, and around the park lakes Central Park's rim.
-  // Each is a row of lots with varied heights, lit windows, storefronts & riverside lamps, box-filtered by the unresolved
-  // wave slopes (vertically) & the foreshortened lateral slopes (horizontally), so distant lights smear into streaks.
-  // The boxes & shorelines come from the real geography (city-config.js): [minX, minZ, maxX, maxZ] slabs inscribed in
-  // the island ~1.1 km apart, the NJ shore west of it & the Brooklyn / Queens shore east of it every 900 m of z
-
+  // Night: nearby Berlin facades and quay lamps, reflected along the same wave
+  // ray and filtered by the unresolved slopes. The bank geometry and roof scale
+  // come from Berlin OSM data; no numbered-street or opposite-borough proxies.
   const IB = ISLAND_BOUNDS;
-  const MANHATTAN_BOXES = [];
-  for (let z0 = IB.minZ; z0 < IB.maxZ - 1; z0 += 1140) {
-    const z1 = Math.min(IB.maxZ, z0 + 1140);
-    let x0 = -Infinity, x1 = Infinity;
-    for (let z = z0; z <= z1 + 0.1; z += (z1 - z0) / 8) {
-      const s = getIslandBoundsAtZ(z);
-      x0 = Math.max(x0, s.westX + 40);
-      x1 = Math.min(x1, s.eastX - 40);
-    }
-    if (x1 - x0 > 100) MANHATTAN_BOXES.push([Math.round(x0), Math.round(z0), Math.round(x1), Math.round(z1)]);
-  }
-  const crossings = (polys, z) => {
-    const xs = [];
-    for (const poly of polys) {
-      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-        const a = poly[i], b = poly[j];
-        if ((a.z > z) !== (b.z > z)) xs.push(a.x + ((z - a.z) * (b.x - a.x)) / (b.z - a.z));
-      }
-    }
-    return xs;
-  };
-  const westShore = [], eastShore = [];
-  for (let z = IB.minZ - 900; z <= IB.maxZ + 900; z += 900) {
-    const s = getIslandBoundsAtZ(Math.max(IB.minZ, Math.min(IB.maxZ, z)));
-    const w = crossings([NJ_SHORELINE_POLYGON], z).filter((x) => x < s.westX - 150);
-    const e = crossings(LONG_ISLAND_POLYGONS || [], z).filter((x) => x > s.eastX + 100);
-    westShore.push([z, w.length ? Math.max(...w) : s.westX - 1300]);
-    eastShore.push([z, e.length ? Math.min(...e) : s.eastX + 900]);
-  }
-  // A shoreline x(z) through its control points, linear from one to the next. Built as a balanced sum of independent
-  // per-segment terms: a 17-deep chain of nested mix() nodes takes TSL's node build exponentially long (getNodeType
-  // recurses unmemoized into every path) and stalls the page
-  const shoreAt = (pts, z) => {
-    let terms = [];
-    for (let i = 1; i < pts.length; i++) {
-      const [za, xa] = pts[i - 1];
-      const [zb, xb] = pts[i];
-      const t = clamp(z.sub(za).div(zb - za), 0.0, 1.0);
-      const before = float(1.0).sub(step(zb, z));
-      const inSeg = i === 1 ? before : i === pts.length - 1 ? step(za, z) : step(za, z).mul(before);
-      terms.push(inSeg.mul(mix(float(xa), float(xb), t)));
-    }
-    while (terms.length > 1) {
-      const next = [];
-      for (let i = 0; i < terms.length; i += 2) next.push(i + 1 < terms.length ? terms[i].add(terms[i + 1]) : terms[i]);
-      terms = next;
-    }
-    return terms[0];
-  };
-  const CPB = CENTRAL_PARK_BOUNDS;
-  const zSt = (n) => streetZ(n);
+  const reflectionBanks = getBerlinReflectionBanks();
+  mat.userData.berlinReflectionBankCount = reflectionBanks.length;
   mat.emissiveNode = Fn(() => {
     const night = smoothstep(0.55, 1.35, cityUniforms.uInteriorGlow);
     const P = positionWorld.xz;
@@ -2588,43 +2603,32 @@ function createWaterMaterial() {
     const horiz = max(length(R.xz), 0.001);
     const dir = R.xz.div(horiz);
     const tanEl = R.y.div(horiz);
-    const sgn = vec2(mix(float(-1.0), float(1.0), step(0.0, dir.x)), mix(float(-1.0), float(1.0), step(0.0, dir.y)));
-    const inv = sgn.div(max(abs(dir), vec2(0.0001))).toVar();
 
-    // Nearest Manhattan face entered from outside
-    const tIsland = float(1e5).toVar();
-    for (const [x0, z0, x1, z1] of MANHATTAN_BOXES) {
-      const ta = vec2(x0, z0).sub(P).mul(inv);
-      const tb = vec2(x1, z1).sub(P).mul(inv);
-      const tn = max(min(ta.x, tb.x), min(ta.y, tb.y));
-      const tf = min(max(ta.x, tb.x), max(ta.y, tb.y));
-      tIsland.assign(min(tIsland, mix(float(1e5), tn, step(0.0, tn).mul(step(tn, tf)))));
+    // Intersect the reflected horizontal ray with the true, simplified banks.
+    // A signed epsilon keeps parallel rays finite without moving any boundary.
+    const tHit = float(1e5).toVar();
+    const S = float(35.0).toVar();
+    for (const [ax, az, bx, bz, skyline] of reflectionBanks) {
+      const ex = bx - ax, ez = bz - az;
+      const denominator = dir.x.mul(ez).sub(dir.y.mul(ex)).toVar();
+      const denominatorSign = mix(float(-1.0), float(1.0), step(0.0, denominator));
+      const safeDenominator = max(abs(denominator), 0.001).mul(denominatorSign);
+      const delta = vec2(ax, az).sub(P);
+      const rayDistance = delta.x.mul(ez).sub(delta.y.mul(ex)).div(safeDenominator);
+      const alongBank = delta.x.mul(dir.y).sub(delta.y.mul(dir.x)).div(safeDenominator);
+      const valid = step(0.0, rayDistance).mul(step(0.0, alongBank)).mul(step(alongBank, 1.0)).mul(step(0.001, abs(denominator)));
+      const candidate = mix(float(1e5), max(rayDistance, 8.0), valid).toVar();
+      const nearer = step(candidate, tHit);
+      S.assign(mix(S, float(skyline), nearer));
+      tHit.assign(min(tHit, candidate));
     }
-    // Across the rivers: the New Jersey waterfront to the west, Queens & Brooklyn to the east
-    const xWest = shoreAt(westShore, P.y).toVar();
-    const xEast = shoreAt(eastShore, P.y).toVar();
-    const tShoreRaw = mix(xWest, xEast, step(0.0, dir.x)).sub(P.x).mul(inv.x).toVar();
-    const tShore = mix(float(8000.0), clamp(tShoreRaw, 60.0, 8000.0), step(0.0, tShoreRaw)).toVar();
-    const onIsland = step(tIsland, tShore);
-    // Park lakes: the walls of buildings around Central Park's rectangle, seen from inside it
-    const ca = vec2(CPB.minX, CPB.minZ).sub(P).mul(inv);
-    const cb = vec2(CPB.maxX, CPB.maxZ).sub(P).mul(inv);
-    const tPark = clamp(min(max(ca.x, cb.x), max(ca.y, cb.y)), 60.0, 4200.0);
-    const lake = step(0.5, pond);
-
-    const tHit = mix(min(tIsland, tShore), tPark, lake).toVar();
+    const bankVisible = step(tHit, 20000.0);
+    tHit.assign(clamp(tHit, 8.0, 3500.0));
     const hit = P.add(dir.mul(tHit)).toVar();
     const hRefl = tHit.mul(tanEl); // height up the facades that this reflection sees
-    const u = hit.x.add(hit.y); // runs along whichever face was hit
-
-    // Skyline heights: Midtown (60th to 28th St) & the Financial District (south of Chambers St) stand tallest
-    const midtown = smoothstep(zSt(80), zSt(60), hit.y).mul(float(1.0).sub(smoothstep(zSt(28), zSt(14), hit.y)));
-    const manhattanS = mix(float(70.0), float(215.0), max(midtown, smoothstep(4400.0, 4950.0, hit.y)));
-    // Across the rivers: the Jersey City towers (Newport to Exchange Place) & Long Island City (opposite 60th-26th St)
-    const jerseyCity = smoothstep(3300.0, 3900.0, hit.y).mul(float(1.0).sub(smoothstep(6100.0, 6500.0, hit.y))).mul(step(hit.x, 0.0));
-    const lic = smoothstep(zSt(62), zSt(57), hit.y).mul(float(1.0).sub(smoothstep(zSt(30), zSt(25), hit.y))).mul(step(0.0, hit.x));
-    const S = mix(mix(mix(float(30.0), float(120.0), max(jerseyCity, lic)), manhattanS, onIsland), float(120.0), lake);
-    const brightness = mix(mix(float(0.6), float(1.0), onIsland), float(0.8), lake);
+    const u = hit.x.add(hit.y); // runs along whichever bank was hit
+    const lake = step(0.5, pond);
+    const brightness = mix(float(0.85), float(0.65), lake).mul(bankVisible);
 
     // Footprint on the facades (m): unresolved slopes tilt the reflection ±2σ, laterally foreshortened at grazing views
     const sigma2 = sqrt(variance).mul(2.0);
@@ -2660,8 +2664,7 @@ function createWaterMaterial() {
       .add(color(0xffcf9a).mul(ground.mul(shopLit).mul(0.4)))
       .add(color(0xffd9b0).mul(lamps));
     const treeline = mix(float(1.0), smoothstep(0.2, 0.42, tanEl), lake); // lake shores: only towers above the trees
-    // The analytic skyline only models the rivers along the detailed island: fade it out up the Hudson & Harlem River
-    // and down the Upper Bay, where its shorelines no longer match the boroughs
+    // Fade the analytic proxy outside the detailed Mitte data boundary.
     const region = smoothstep(IB.minZ - 400.0, IB.minZ - 100.0, P.y).mul(float(1.0).sub(smoothstep(IB.maxZ + 200.0, IB.maxZ + 600.0, P.y)));
     return city.mul(brightness).mul(treeline).mul(fresnel).mul(night).mul(region);
   })();

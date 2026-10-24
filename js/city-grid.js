@@ -38,7 +38,11 @@ import {
   ALL_STREETS,
   blockAt,
   EAST_RIVER_BRIDGES,
-  CUT_Z
+  CUT_Z,
+  BERLIN_DATA,
+  nearestRoads,
+  pointInPoly,
+  waterAt
 } from './city-config.js';
 import {
   createRoadSurfaceMaterial,
@@ -58,6 +62,8 @@ import {
   createTunnelShadeMaterial
 } from './tsl-materials.js';
 import { GEO } from './nyc-geodata.js';
+import { LANDMARK_EXCLUSIONS, BERGHAIN_TREE_SITES } from './landmarks.js';
+import { berlinPoints, berlinBounds, berlinPolygonGeometry, berlinStrip, berlinRoadSegments, berlinGeometryGroups } from './berlin-geometry.js';
 
 // Live construction data consumed by the building and street-detail builders after buildCityGrid().
 let centralParkClearings;
@@ -66,6 +72,321 @@ let parkLampSites;
 let pavedPlazaRects;
 let sidewalkBlocks;
 let fdrViaduct;
+let berlinStreetSites = [];
+
+function buildBerlinCityGrid(scene) {
+  const group = new THREE.Group();
+  group.name = 'BerlinMitteCityGrid';
+  const roadMat = createRoadSurfaceMaterial();
+  const sidewalkMat = createSidewalkMaterial();
+  const curbMat = createCurbMaterial();
+  const waterMat = createWaterMaterial();
+  const lawnMat = createParkLawnMaterial(false);
+  const pavingMat = createParkPavingMaterial();
+  const paintMat = createRoadPaintMaterial();
+  const collections = new Map();
+  const collect = (geometry, material) => {
+    if (!geometry) return;
+    if (!collections.has(material)) collections.set(material, []);
+    collections.get(material).push(geometry);
+  };
+  const footprints = [], sidewalks = [], colliders = [];
+  parkTreeSites = []; parkLampSites = []; pavedPlazaRects = []; sidewalkBlocks = [];
+  centralParkClearings = null; fdrViaduct = null; berlinStreetSites = [];
+
+  // Berlin is a continuous inland city: subtract the actual Spree/canal outlines
+  // from the land. Islands inside water polygons are restored as land polygons.
+  const water = (BERLIN_DATA.water || []).filter(w => w.ring?.length >= 6);
+  const waterY = ISLAND_BOUNDS.waterLevel;
+  const bankTop = 0.19, bankBottom = waterY - 0.03;
+  const land = [{ x: -16000, z: -16000 }, { x: 16000, z: -16000 }, { x: 16000, z: 16000 }, { x: -16000, z: 16000 }];
+  collect(berlinPolygonGeometry(land, water.map(w => berlinPoints(w.ring)), -0.025), sidewalkMat);
+  for (const feature of water) {
+    const ring = berlinPoints(feature.ring), holes = (feature.holes || []).map(berlinPoints);
+    collect(berlinPolygonGeometry(ring, holes, waterY), waterMat);
+    for (const hole of holes) collect(berlinPolygonGeometry(hole, [], -0.025), sidewalkMat);
+    for (const edge of [ring, ...holes]) for (let i = 0; i < edge.length; i++) {
+      const a = edge[i], b = edge[(i + 1) % edge.length];
+      const len = Math.hypot(b.x - a.x, b.z - a.z);
+      if (len < 0.4) continue;
+      const wall = new THREE.BoxGeometry(len + 0.05, bankTop - bankBottom, 0.38);
+      wall.rotateY(-Math.atan2(b.z - a.z, b.x - a.x));
+      wall.translate((a.x + b.x) / 2, (bankTop + bankBottom) / 2, (a.z + b.z) / 2);
+      collect(wall, curbMat);
+    }
+  }
+  for (const park of BERLIN_DATA.parks || []) {
+    if (!park.ring || park.ring.length < 6) continue;
+    const ring = berlinPoints(park.ring), holes = (park.holes || []).map(berlinPoints);
+    const paved = ['square', 'pedestrian', 'plaza'].includes(park.kind);
+    const geometry = berlinPolygonGeometry(ring, holes, paved ? 0.055 : 0.045);
+    if (paved) setPavingStyle(geometry, 2);
+    collect(geometry, paved ? pavingMat : lawnMat);
+    if (paved) pavedPlazaRects.push(berlinBounds(ring));
+  }
+
+  // Tempelhofer Feld retains the former airport's mapped runway and apron
+  // surfaces. These are park ground geometry, not new traffic corridors.
+  for (const feature of BERLIN_DATA.aeroways || []) {
+    if (feature.ring?.length >= 6) {
+      collect(berlinPolygonGeometry(berlinPoints(feature.ring), (feature.holes || []).map(berlinPoints), 0.065), roadMat);
+    } else if (feature.pts?.length >= 4) {
+      const points = berlinPoints(feature.pts);
+      const halfWidth = Math.max(2, feature.width || (feature.kind === 'runway' ? 45 : 15)) / 2;
+      for (let i = 1; i < points.length; i++) collect(berlinStrip(points[i - 1], points[i], halfWidth, 0.065), roadMat);
+    }
+  }
+
+  const roadSegments = berlinRoadSegments();
+  const carriagewayKinds = new Set(['motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link',
+    'secondary', 'secondary_link', 'tertiary', 'tertiary_link', 'residential', 'unclassified', 'service', 'living_street']);
+  const curbedKinds = new Set(['trunk', 'trunk_link', 'primary', 'primary_link', 'secondary', 'secondary_link',
+    'tertiary', 'tertiary_link', 'residential', 'unclassified']);
+  const isSharedSurface = s => s.road.kind === 'living_street' || (s.road.kind === 'service' && /platz/i.test(s.road.name || ''));
+  const isCarriageway = s => carriagewayKinds.has(s.road.kind) && !isSharedSurface(s);
+  const carriagewayIndex = new Map();
+  const indexCell = 48;
+  for (const s of roadSegments) {
+    if (!isCarriageway(s)) continue;
+    const pad = s.width / 2 + 1;
+    for (let x = Math.floor((Math.min(s.a.x, s.b.x) - pad) / indexCell); x <= Math.floor((Math.max(s.a.x, s.b.x) + pad) / indexCell); x++) {
+      for (let z = Math.floor((Math.min(s.a.z, s.b.z) - pad) / indexCell); z <= Math.floor((Math.max(s.a.z, s.b.z) + pad) / indexCell); z++) {
+        const key = `${x}/${z}`;
+        if (!carriagewayIndex.has(key)) carriagewayIndex.set(key, []);
+        carriagewayIndex.get(key).push(s);
+      }
+    }
+  }
+  const nearbyCarriageways = (a, b, pad = 0) => {
+    const found = new Set();
+    for (let x = Math.floor((Math.min(a.x, b.x) - pad) / indexCell); x <= Math.floor((Math.max(a.x, b.x) + pad) / indexCell); x++) {
+      for (let z = Math.floor((Math.min(a.z, b.z) - pad) / indexCell); z <= Math.floor((Math.max(a.z, b.z) + pad) / indexCell); z++) {
+        for (const road of carriagewayIndex.get(`${x}/${z}`) || []) found.add(road);
+      }
+    }
+    return found;
+  };
+  // Four half-planes of a real carriageway segment, all with inside >= 0.
+  const roadPlanes = (s, pad = 0) => {
+    const nx = -s.uz, nz = s.ux, along = s.a.x * s.ux + s.a.z * s.uz, across = s.a.x * nx + s.a.z * nz;
+    return [[s.ux, s.uz, along - pad], [-s.ux, -s.uz, -along - s.len - pad],
+      [nx, nz, across - s.width / 2 - pad], [-nx, -nz, -across - s.width / 2 - pad]];
+  };
+  const stripPoints = (s, half, offset = 0) => {
+    const nx = -s.uz, nz = s.ux;
+    return [
+      { x: s.a.x + nx * (offset - half), z: s.a.z + nz * (offset - half) },
+      { x: s.b.x + nx * (offset - half), z: s.b.z + nz * (offset - half) },
+      { x: s.b.x + nx * (offset + half), z: s.b.z + nz * (offset + half) },
+      { x: s.a.x + nx * (offset + half), z: s.a.z + nz * (offset + half) },
+    ];
+  };
+  const outsideRoads = (polygon, roads, source) => {
+    const area = pts => Math.abs(pts.reduce((sum, a, i) => {
+      const b = pts[(i + 1) % pts.length]; return sum + a.x * b.z - b.x * a.z;
+    }, 0)) * 0.5;
+    let fragments = [polygon];
+    for (const road of roads) {
+      if (road === source || road.bridge !== source.bridge) continue;
+      const outside = [];
+      const planes = roadPlanes(road, 0.03);
+      for (let fragment of fragments) {
+        let intersection = fragment;
+        for (const [nx, nz, c] of planes) {
+          intersection = clipPolygonHalfPlane(intersection, nx, nz, c);
+          if (intersection.length < 3) break;
+        }
+        // An unrelated nearby road's infinite half-planes must not subdivide a
+        // path that never enters its finite carriageway rectangle.
+        if (intersection.length < 3 || area(intersection) < 0.015) { outside.push(fragment); continue; }
+        for (const [nx, nz, c] of planes) {
+          const piece = clipPolygonHalfPlane(fragment, -nx, -nz, -c);
+          if (piece.length >= 3 && area(piece) > 0.015) outside.push(piece);
+          fragment = clipPolygonHalfPlane(fragment, nx, nz, c);
+          if (fragment.length < 3) break;
+        }
+      }
+      fragments = outside;
+      if (!fragments.length) break;
+    }
+    return fragments;
+  };
+  // Clip a curb's centreline out of every other carriageway. Unlike a fixed
+  // inset per OSM segment, this opens actual junctions and preserves continuous
+  // curb runs along simple bends and arbitrarily split street centre lines.
+  const curbIntervals = (a, b, source, roads) => {
+    let intervals = [[0, 1]];
+    const dx = b.x - a.x, dz = b.z - a.z;
+    for (const road of roads) {
+      if (road === source || road.bridge !== source.bridge) continue;
+      let lo = 0, hi = 1;
+      for (const [nx, nz, c] of roadPlanes(road, 0.24)) {
+        const start = nx * a.x + nz * a.z - c, rate = nx * dx + nz * dz;
+        if (Math.abs(rate) < 1e-9) { if (start < 0) { lo = 1; hi = 0; break; } }
+        else if (rate > 0) lo = Math.max(lo, -start / rate);
+        else hi = Math.min(hi, -start / rate);
+      }
+      if (lo >= hi || hi <= 0 || lo >= 1) continue;
+      const next = [];
+      for (const [start, end] of intervals) {
+        if (hi <= start || lo >= end) next.push([start, end]);
+        else {
+          if (lo > start) next.push([start, Math.min(end, lo)]);
+          if (hi < end) next.push([Math.max(start, hi), end]);
+        }
+      }
+      intervals = next;
+      if (!intervals.length) break;
+    }
+    return intervals;
+  };
+  let clippedPedestrianPieces = 0, clippedSidewalkPieces = 0, curbRuns = 0;
+  const paintStrip = (s, offset, halfWidth = 0.075, duty = 0.5, period = 8) => {
+    const g = berlinStrip(s.a, s.b, halfWidth, s.bridge ? 0.081 : 0.071, offset);
+    if (!g) return;
+    const p = g.getAttribute('position'), paints = [], sides = [], colors = [];
+    for (let i = 0; i < p.count; i++) {
+      const dx = p.getX(i) - s.a.x, dz = p.getZ(i) - s.a.z;
+      const along = dx * s.ux + dz * s.uz;
+      const across = dx * -s.uz + dz * s.ux - offset;
+      paints.push(along, period, duty); sides.push(-s.uz * across, s.ux * across); colors.push(1, 1, 1);
+    }
+    g.setAttribute('paint', new THREE.Float32BufferAttribute(paints, 3));
+    g.setAttribute('side', new THREE.Float32BufferAttribute(sides, 2));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    collect(g, paintMat);
+  };
+  const streetSiteKeys = new Set();
+  for (const s of roadSegments) {
+    const width = s.width;
+    const y = 0.06;
+    if (!isCarriageway(s)) {
+      const half = Math.max(0.75, width * 0.5);
+      const pieces = outsideRoads(stripPoints(s, half), nearbyCarriageways(s.a, s.b, half), s);
+      for (const piece of pieces) {
+        const geometry = berlinPolygonGeometry(piece, [], 0.055);
+        setPavingStyle(geometry, s.road.kind === 'cycleway' ? 0 : 2);
+        collect(geometry, pavingMat);
+        clippedPedestrianPieces++;
+      }
+      continue;
+    }
+    if (curbedKinds.has(s.road.kind)) {
+      // Sidewalks are two separate shoulder polygons, never a full-width slab
+      // through the road. Their pavement, as well as their kerb, is cut back at
+      // every intersecting carriageway (including turns and service accesses).
+      const neighbors = nearbyCarriageways(s.a, s.b, width / 2 + 2.8);
+      for (const side of [-1, 1]) {
+        const shoulder = stripPoints(s, 1.4, side * (width / 2 + 1.4));
+        for (const piece of outsideRoads(shoulder, neighbors, s)) {
+          collect(berlinPolygonGeometry(piece, [], 0.025), sidewalkMat);
+          clippedSidewalkPieces++;
+        }
+      }
+    }
+    collect(berlinStrip(s.a, s.b, width / 2, y), roadMat);
+    const nx = -s.uz, nz = s.ux;
+    if (width >= 7 && !s.road.oneway && s.road.kind !== 'service') paintStrip(s, 0, 0.075, 0.45);
+    if (width >= 12) {
+      for (const side of [-1, 1]) paintStrip(s, side * width * 0.24, 0.065, 0.45);
+    }
+    if (curbedKinds.has(s.road.kind)) for (const side of [-1, 1]) {
+      const offset = side * (width / 2 + 0.08);
+      const a = { x: s.a.x + nx * offset, z: s.a.z + nz * offset };
+      const b = { x: s.b.x + nx * offset, z: s.b.z + nz * offset };
+      for (const [start, end] of curbIntervals(a, b, s, nearbyCarriageways(a, b, 0.5))) {
+        const length = s.len * (end - start);
+        if (length < 2.5) continue;
+        const mid = (start + end) / 2;
+        const geometry = new THREE.BoxGeometry(length, 0.18, 0.16);
+        geometry.rotateY(-Math.atan2(s.uz, s.ux));
+        geometry.translate(a.x + (b.x - a.x) * mid, 0.08, a.z + (b.z - a.z) * mid);
+        collect(geometry, curbMat);
+        curbRuns++;
+      }
+    }
+    if (s.len >= 12 && s.road.kind !== 'service') {
+      const count = Math.max(1, Math.floor(s.len / 34));
+      for (let k = 0; k < count; k++) for (const side of [-1, 1]) {
+        const t = (k + 0.5) / count, x = s.a.x + s.ux * s.len * t + nx * side * (width / 2 + 1.3),
+          z = s.a.z + s.uz * s.len * t + nz * side * (width / 2 + 1.3);
+        const key = `${Math.round(x / 14)}/${Math.round(z / 14)}`;
+        if (streetSiteKeys.has(key)) continue;
+        streetSiteKeys.add(key);
+        berlinStreetSites.push({ x, z, nx: -nx * side, nz: -nz * side, ux: s.ux, uz: s.uz, name: s.road.name || '', road: s.road });
+      }
+    }
+  }
+  for (const tree of BERLIN_DATA.trees || []) {
+    const h = Math.abs(Math.sin(tree.x * 1.9 + tree.z * 8.1));
+    parkTreeSites.push({ x: tree.x, z: tree.z, y: 0.09, scale: tree.h ? Math.max(0.45, Math.min(1.8, tree.h / 13)) : 0.66 + h * 0.62,
+      species: h < 0.42 ? 0 : h < 0.65 ? 1 : 2, yaw: h * Math.PI * 2 });
+  }
+  // OSM often maps a wooded area without mapping each individual tree. Fill
+  // those patches procedurally, preserving mapped trees and clear paths.
+  const mappedTreeCount = parkTreeSites.length;
+  const treeCells = new Map();
+  const indexTree = tree => {
+    const key = `${Math.floor(tree.x / 8)}/${Math.floor(tree.z / 8)}`;
+    if (!treeCells.has(key)) treeCells.set(key, []);
+    treeCells.get(key).push(tree);
+  };
+  parkTreeSites.forEach(indexTree);
+  const nearbyTree = (x, z, radius = 7) => {
+    const ix = Math.floor(x / 8), iz = Math.floor(z / 8);
+    for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+      if ((treeCells.get(`${ix + dx}/${iz + dz}`) || []).some(t => Math.hypot(t.x - x, t.z - z) < radius)) return true;
+    }
+    return false;
+  };
+  // Photo-referenced trees and undergrowth around Berghain use the original
+  // tree geometry, instancing and LOD. Keep mapped trees in preference to extras.
+  for (const tree of BERGHAIN_TREE_SITES) {
+    if (nearbyTree(tree.x, tree.z, tree.isShrub ? 1.25 : 5)) continue;
+    parkTreeSites.push(tree); indexTree(tree);
+  }
+  const landmarkTrees = parkTreeSites.length - mappedTreeCount;
+  const hash = (x, z, seed) => { const n = Math.sin(x * 12.9898 + z * 78.233 + seed) * 43758.5453; return n - Math.floor(n); };
+  for (const park of BERLIN_DATA.parks || []) {
+    if (!['wood', 'forest'].includes(park.kind) && park.name !== 'Viktoriapark') continue;
+    const ring = berlinPoints(park.ring), holes = (park.holes || []).map(berlinPoints), bounds = berlinBounds(ring);
+    for (let gx = Math.ceil(bounds.minX / 14); gx <= Math.floor(bounds.maxX / 14); gx++) {
+      for (let gz = Math.ceil(bounds.minZ / 14); gz <= Math.floor(bounds.maxZ / 14); gz++) {
+        const x = gx * 14 + (hash(gx, gz, 1) - 0.5) * 10, z = gz * 14 + (hash(gx, gz, 2) - 0.5) * 10;
+        if (!pointInPoly(ring, x, z) || holes.some(h => pointInPoly(h, x, z)) || nearbyTree(x, z) || waterAt(x, z)) continue;
+        if (LANDMARK_EXCLUSIONS.some(b => x > b.minX - 4 && x < b.maxX + 4 && z > b.minZ - 4 && z < b.maxZ + 4)) continue;
+        if (nearestRoads(x, z, 20).some(q => q.dist < q.road.w / 2 + 3)) continue;
+        const block = blockAt(x, z); if (block && !block.park && !block.sidewalk) continue;
+        const h = hash(gx, gz, 3), tree = { x, z, y: 0.09, scale: 0.7 + h * 0.5, species: h < 0.5 ? 0 : h < 0.8 ? 1 : 2, yaw: h * Math.PI * 2 };
+        parkTreeSites.push(tree); indexTree(tree);
+      }
+    }
+  }
+  // Merge in spatially modest batches, retaining the original TSL node materials
+  // including wet asphalt, animated water and anti-aliased dash paint.
+  for (const [material, geometries] of collections) {
+    let firstMesh;
+    for (const cell of berlinGeometryGroups(geometries)) for (let i = 0; i < cell.length; i += 300) {
+      const chunk = cell.slice(i, i + 300).map(g => {
+        if (!g.index) return g;
+        const expanded = g.toNonIndexed(); g.dispose(); return expanded;
+      });
+      const merged = mergeGeometries(chunk, false);
+      chunk.forEach(g => g.dispose());
+      if (!merged) continue;
+      const mesh = new THREE.Mesh(merged, material);
+      mesh.receiveShadow = material !== waterMat; mesh.castShadow = material === curbMat;
+      if (material === paintMat) mesh.renderOrder = 1;
+      if (firstMesh) mesh.userData.sharesPipelineWith = firstMesh;
+      else firstMesh = mesh;
+      group.add(mesh);
+    }
+  }
+  group.userData = { city: 'Berlin', source: 'OpenStreetMap', roads: roadSegments.length, mappedTrees: mappedTreeCount, landmarkTrees, proceduralWoodlandTrees: parkTreeSites.length - mappedTreeCount - landmarkTrees,
+    clippedPedestrianPieces, clippedSidewalkPieces, curbRuns, junctionClippedCurbs: true, junctionClippedSidewalks: true };
+  scene.add(group);
+  return { group, sidewalks, footprints, highwayLanes: [], colliders };
+}
 
 // js/city-grid.js
 // Builds Manhattan Island's true polygonal coastline contour, granite seawall bulkhead,
@@ -1476,6 +1797,7 @@ function buildWaterfrontPiers(group) {
 }
 
 function buildCityGrid(scene) {
+  if (BERLIN_DATA) return buildBerlinCityGrid(scene);
   const group = new THREE.Group();
   group.name = 'ManhattanCityGrid';
 
@@ -3543,5 +3865,6 @@ export {
   parkLampSites,
   pavedPlazaRects,
   sidewalkBlocks,
-  fdrViaduct
+  fdrViaduct,
+  berlinStreetSites
 };

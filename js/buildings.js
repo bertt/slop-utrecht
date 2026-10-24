@@ -30,7 +30,9 @@ import {
   streetZ,
   avenueX,
   getBroadwayX,
-  EAST_RIVER_BRIDGES
+  EAST_RIVER_BRIDGES,
+  BERLIN_DATA,
+  districtAt
 } from './city-config.js';
 import {
   createPreWarBuildingMaterial,
@@ -41,6 +43,8 @@ import {
 } from './tsl-materials.js';
 import { GEO } from './nyc-geodata.js';
 import { fdrViaduct, pavedPlazaRects, parkTreeSites, sidewalkBlocks } from './city-grid.js';
+import { berlinPoints, berlinBounds, berlinPolygonGeometry, nearestBerlinRoad, berlinSpatialGroups, berlinGeometryGroups } from './berlin-geometry.js';
+import { LANDMARK_EXCLUSIONS, LANDMARK_SOURCE_EXCLUSIONS } from './landmarks.js';
 
 // js/buildings.js
 // Generates dense, architecturally varied Manhattan city blocks across the entire island
@@ -255,7 +259,7 @@ function carve(r, holes, axis = 'x') {
 
 function buildCityBlocks(scene) {
   const group = new THREE.Group();
-  group.name = 'ManhattanCityBlocks';
+  group.name = BERLIN_DATA ? 'BerlinMitteCityBlocks' : 'ManhattanCityBlocks';
   const colliders = [];
 
   // Frame of the lots being populated. Irregular blocks come with frontage frames (city-config.js BLOCKS: lots laid
@@ -321,8 +325,8 @@ function buildCityBlocks(scene) {
     }],
     // 1: Historic Warm Red/Terracotta Brick (Garment District / Chelsea / SoHo / Upper West Side)
     [createPreWarBuildingMaterial, {
-      stoneColor: 0xa45a45,
-      trimColor: 0xcab9a0,
+      stoneColor: BERLIN_DATA ? 0xc8b49b : 0xa45a45,
+      trimColor: BERLIN_DATA ? 0xe4dac5 : 0xcab9a0,
       windowGlassColor: 0x16222e,
       windowWidth: 2.4,
       floorHeight: 3.5,
@@ -332,8 +336,8 @@ function buildCityBlocks(scene) {
     }],
     // 2: Classic NYC Brownstone & Dark Masonry (Cross-street rowhouses, Village & Harlem)
     [createPreWarBuildingMaterial, {
-      stoneColor: 0x765443,
-      trimColor: 0x503a2e,
+      stoneColor: BERLIN_DATA ? 0xb1b4a1 : 0x765443,
+      trimColor: BERLIN_DATA ? 0xd7d9c9 : 0x503a2e,
       windowGlassColor: 0x151e26,
       windowWidth: 2.2,
       floorHeight: 3.4,
@@ -1988,7 +1992,128 @@ function buildCityBlocks(scene) {
     for (let k = 0; k < n; k++) out.push([x0, x1, z0 + k * (s + gap), z0 + k * (s + gap) + s]);
     return out;
   }
-  for (const b of BLOCKS) {
+  if (BERLIN_DATA) {
+    // Exact OSM rings drive the original facade shaders and detail-streaming
+    // pools. Thin, oriented facade boxes preserve courtyard openings and the
+    // angled street walls of Mitte without Manhattan's synthetic block layouts.
+    const roofBuckets = [[], [], []];
+    const roofMaterials = [0x655c51, 0x857369, 0x676b68].map(c => {
+      const m = new THREE.MeshStandardNodeMaterial({ color: c, roughness: 0.9 });
+      m.colorNode = color(c).mul(mx_noise_float(positionWorld.xz.mul(0.9)).mul(0.12).add(0.94));
+      return m;
+    });
+    const signedArea = pts => pts.reduce((sum, a, i) => {
+      const b = pts[(i + 1) % pts.length]; return sum + a.x * b.z - b.x * a.z;
+    }, 0) / 2;
+    let built = 0;
+    for (const source of BERLIN_DATA.buildings || []) {
+      if ((LANDMARK_SOURCE_EXCLUSIONS.has(source.id) || LANDMARK_SOURCE_EXCLUSIONS.has(source.osmId))) continue;
+      if (!source.ring || source.ring.length < 6) continue;
+      const poly = berlinPoints(source.ring), holes = (source.holes || []).map(berlinPoints);
+      const bounds = berlinBounds(poly);
+      const cx = (bounds.minX + bounds.maxX) / 2, cz = (bounds.minZ + bounds.maxZ) / 2;
+      if (cx < ISLAND_BOUNDS.minX - 100 || cx > ISLAND_BOUNDS.maxX + 100 || cz < ISLAND_BOUNDS.minZ - 100 || cz > ISLAND_BOUNDS.maxZ + 100) continue;
+      if (LANDMARK_EXCLUSIONS.some(r => cx > r.minX && cx < r.maxX && cz > r.minZ && cz < r.maxZ)) continue;
+      if (Math.abs(signedArea(poly)) < 7) continue;
+      const base = Math.max(0, source.minHeight || 0);
+      const height = Math.max(base + 0.15, source.h || (source.levels || 6) * 3.4);
+      const roofHeight = Math.max(0, Math.min(source.roofHeight || 0, height * 0.4));
+      const pitched = roofHeight > 0.6 && poly.length === 4 && !holes.length && ['gabled', 'hipped', 'half-hipped', 'pyramidal'].includes(source.roofShape);
+      const eave = pitched ? Math.max(base + 0.5, height - roofHeight) : height;
+      const seed = (source.styleSeed || source.id).split('').reduce((n, c) => (Math.imul(n, 31) + c.charCodeAt(0)) | 0, 701);
+      rand = mulberry32(seed);
+      const tone = rand();
+      const updated = source.accuracyArea === 'mitte' || source.accuracyArea === 'ringbahn';
+      const colourName = source.colour?.trim().toLowerCase();
+      const facadeColour = updated && colourName && (/^#[0-9a-f]{6}$/.test(colourName) || THREE.Color.NAMES[colourName] !== undefined) ? new THREE.Color(colourName) : null;
+      const warmMasonry = facadeColour && facadeColour.r > facadeColour.b * 1.4;
+      const modern = !warmMasonry && ['office', 'commercial', 'hotel', 'retail'].includes(source.kind) && (height > 30 || tone > 0.72);
+      const matIndex = modern ? 3 + Math.floor(rand() * 3) : Math.floor(rand() * 3);
+      const detail = { id: source.id, name: source.name, cx, cz, ...bounds, district: districtAt(cx, cz), maxH: height,
+        cornices: [], waterTowers: [], hvacUnits: [], fireEscapes: [], awnings: [], scaffoldSheds: [], yards: [],
+        footprints: [{ x0: bounds.minX, x1: bounds.maxX, z0: bounds.minZ, z1: bounds.maxZ, h: height, tone, pts: poly, holes }],
+        sourceHeight: source.h, sourceHeightKind: source.heightSource };
+      for (const [ringIndex, ring] of [poly, ...holes].entries()) {
+        const direction = Math.sign(signedArea(ring)) || 1;
+        for (let i = 0; i < ring.length; i++) {
+          const a = ring[i], b = ring[(i + 1) % ring.length];
+          const dx = b.x - a.x, dz = b.z - a.z, length = Math.hypot(dx, dz);
+          if (length < 0.3) continue;
+          const x = (a.x + b.x) / 2, z = (a.z + b.z) / 2;
+          const ry = -Math.atan2(dz, dx), thickness = 0.44;
+          // The footprint's clockwise exterior is to the right of its edge;
+          // courtyard normals point into the hole instead.
+          const normalSign = ringIndex ? -direction : direction;
+          const nx = dz / length * normalSign, nz = -dx / length * normalSign;
+          const road = !updated && ringIndex === 0 && length > 6 && base < 0.5 ? nearestBerlinRoad(x + nx * 3, z + nz * 3, 35) : null;
+          const shop = !updated && road && road.distance < road.width / 2 + 13 && !['church', 'cathedral', 'school', 'university', 'civic'].includes(source.kind);
+          const face = ringIndex ? WALL_KINDS.rear : shop ? WALL_KINDS.shop : WALL_KINDS.entry;
+          buckets[matIndex].push({ x, y: base + (eave - base) / 2 + 0.02, z, w: length + 0.06, h: eave - base, d: thickness,
+            ry, tone, facadeColour, facadeLevels: source.facadeLevels, faces: [WALL_KINDS.blankStone, WALL_KINDS.blankStone, face, face] });
+          if (base < 1) {
+            const hx = length / 2, hz = thickness / 2, cs = Math.cos(ry), sn = Math.sin(ry);
+            const ex = Math.abs(cs) * hx + Math.abs(sn) * hz, ez = Math.abs(sn) * hx + Math.abs(cs) * hz;
+            colliders.push({ minX: x - ex, maxX: x + ex, minZ: z - ez, maxZ: z + ez, maxY: height,
+              obb: { cx: x, cz: z, hx, hz, cs, sn } });
+          }
+          if (!modern && height > 7 && length > 1.5) {
+            detail.cornices.push({ x, z, y: eave, w: length + 0.2, h: 0.44, d: 0.85, ry });
+            if (height > 13) detail.cornices.push({ x, z, y: 4.4, w: length + 0.12, h: 0.22, d: 0.62, ry });
+          }
+          if (shop && length > 9 && rand() < 0.48) {
+            const count = Math.min(3, Math.floor(length / 8));
+            for (let j = 0; j < count; j++) {
+              const t = (j + 0.5) / count;
+              // The upstream awning is long along local Z, unlike facade boxes.
+              detail.awnings.push({ x: a.x + dx * t + nx * 0.8, z: a.z + dz * t + nz * 0.8, y: 3.8,
+                w: 1.65, d: Math.min(6.4, length / count - 1.0), dir: -1, colorIdx: Math.floor(rand() * 5), ry: Math.atan2(nx, nz) + Math.PI / 2 });
+            }
+          }
+        }
+      }
+      let roof = berlinPolygonGeometry(poly, holes, eave + 0.035);
+      if (pitched) {
+        // Hipped/gabled roof on a mapped quadrilateral, preserving every eave
+        // corner; no guessed Manhattan towers or rooftop water tanks.
+        const ordered = signedArea(poly) < 0 ? [...poly].reverse() : poly;
+        const edges = ordered.map((a, i) => Math.hypot(ordered[(i + 1) % 4].x - a.x, ordered[(i + 1) % 4].z - a.z));
+        const start = edges.indexOf(Math.max(...edges)), p = Array.from({ length: 4 }, (_, i) => ordered[(start + i) % 4]);
+        const inset = source.roofShape === 'gabled' ? 0 : 0.18;
+        const left = { x: (p[0].x + p[3].x) / 2, z: (p[0].z + p[3].z) / 2 };
+        const right = { x: (p[1].x + p[2].x) / 2, z: (p[1].z + p[2].z) / 2 };
+        const v = p.map(q => [q.x, eave + 0.03, q.z]);
+        v.push([left.x + (right.x - left.x) * inset, height + 0.03, left.z + (right.z - left.z) * inset]);
+        v.push([right.x + (left.x - right.x) * inset, height + 0.03, right.z + (left.z - right.z) * inset]);
+        const indices = [0, 4, 5, 0, 5, 1, 3, 2, 5, 3, 5, 4, 0, 3, 4, 1, 5, 2];
+        const positions = [], uvs = [];
+        for (const index of indices) { positions.push(...v[index]); uvs.push(v[index][0], v[index][2]); }
+        roof.dispose(); roof = new THREE.BufferGeometry();
+        roof.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        roof.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2)); roof.computeVertexNormals();
+      }
+      roofBuckets[Math.floor(tone * 3)].push(roof);
+      if (!pitched && !holes.length && !source.part && height > 12 && rand() < 0.34) {
+        detail.hvacUnits.push({ x: cx, z: cz, y: height, w: 2.2, h: 0.85, d: 3.0, ry: 0 });
+      }
+      quadtree.insert(detail); allBlocks.push(detail); built++;
+    }
+    for (let materialIndex = 0; materialIndex < roofBuckets.length; materialIndex++) {
+      let firstMesh;
+      for (const cell of berlinGeometryGroups(roofBuckets[materialIndex])) for (let i = 0; i < cell.length; i += 250) {
+        const pieces = cell.slice(i, i + 250).map(g => {
+          if (!g.index) return g;
+          const expanded = g.toNonIndexed(); g.dispose(); return expanded;
+        });
+        const mesh = new THREE.Mesh(mergeGeometries(pieces, false), roofMaterials[materialIndex]);
+        mesh.castShadow = mesh.receiveShadow = true; group.add(mesh);
+        if (firstMesh) mesh.userData.sharesPipelineWith = firstMesh;
+        else firstMesh = mesh;
+        pieces.forEach(g => g.dispose());
+      }
+    }
+    group.userData = { city: 'Berlin', buildings: built, originalFacadeShaders: true, originalDetailStreaming: true };
+  }
+  for (const b of BERLIN_DATA ? [] : BLOCKS) {
     if (b.park > 0.6 || b.median) continue;
     minLot = b.frames ? 12 : 15;
     for (const [th, px, pz, rects] of b.frames || [[0, 0, 0, b.rects]]) {
@@ -2106,10 +2231,15 @@ function buildCityBlocks(scene) {
 
   buckets.forEach((items, matIdx) => {
     if (items.length === 0) return;
-    const inst = createFacadeBoxes(materials[matIdx], items);
-    inst.castShadow = true;
-    inst.receiveShadow = true;
-    group.add(inst);
+    let firstMesh;
+    for (const cell of BERLIN_DATA ? berlinSpatialGroups(items) : [items]) {
+      const inst = createFacadeBoxes(materials[matIdx], cell);
+      inst.castShadow = true;
+      inst.receiveShadow = true;
+      if (firstMesh) inst.userData.sharesPipelineWith = firstMesh;
+      else firstMesh = inst;
+      group.add(inst);
+    }
   });
 
   // Billboards: one merged mesh per poster theme
@@ -2296,11 +2426,11 @@ function buildCityBlocks(scene) {
   group.add(awningInst);
 
   const signThemes = [
-    { bg: '#161210', border: '#c89d54', text: 'FIFTH AVE BISTRO · EST. 1928', color: '#ffe4a8' },
-    { bg: '#0c2244', border: '#38b6ff', text: 'DUANE READE · PHARMACY', color: '#ffffff' },
-    { bg: '#142b20', border: '#d4af37', text: 'MANHATTAN BOOKS & ESPRESSO', color: '#fff2cc' },
-    { bg: '#280a10', border: '#ff5252', text: 'BROADWAY DELI & GRILL · 24HR', color: '#ffd180' },
-    { bg: '#101318', border: '#e0e6ed', text: 'EMPIRE WATCHES · NEW YORK', color: '#f5f9ff' }
+    { bg: '#161210', border: '#c89d54', text: 'KAWIARNIA · KAWA I CIASTA', color: '#ffe4a8' },
+    { bg: '#0c2244', border: '#38b6ff', text: 'APOTHEEK · UTRECHT', color: '#ffffff' },
+    { bg: '#142b20', border: '#d4af37', text: 'KSIĘGARNIA · KSIĄŻKI I KAWA', color: '#fff2cc' },
+    { bg: '#280a10', border: '#ff5252', text: 'SKLEP NOCNY · NAPOJE', color: '#ffd180' },
+    { bg: '#101318', border: '#e0e6ed', text: 'PIEKARNIA · ŚWIEŻE PIECZYWO', color: '#f5f9ff' }
   ];
   const MAX_SIGNS_PER_THEME = Math.ceil(MAX_AWNINGS / signThemes.length) + 32;
   const signInsts = signThemes.map((st) => {
@@ -2415,6 +2545,7 @@ function buildCityBlocks(scene) {
       //    roofs share a plane) so roofs & terraces keep their own roofing instead of a stone lid
       for (let i = 0; i < blk.cornices.length && corniceCount < MAX_CORNICES; i++) {
         const c = blk.cornices[i];
+        dummy.rotation.set(0, c.ry ?? blk.ry ?? 0, 0);
         dummy.position.set(c.x, c.y - c.h * 0.6, c.z);
         dummy.scale.set(c.w, c.h, c.d);
         dummy.updateMatrix();
@@ -2443,6 +2574,7 @@ function buildCityBlocks(scene) {
       // 3. Rooftop HVAC & mechanical bulkheads
       for (let i = 0; i < blk.hvacUnits.length && hvacCount < MAX_HVAC; i++) {
         const u = blk.hvacUnits[i];
+        dummy.rotation.set(0, u.ry ?? blk.ry ?? 0, 0);
         dummy.position.set(u.x, u.y + u.h * 0.5, u.z);
         dummy.scale.set(u.w, u.h, u.d);
         dummy.updateMatrix();
@@ -2455,6 +2587,7 @@ function buildCityBlocks(scene) {
       // 5. Retail awnings & illuminated storefront fascia signs
       for (let i = 0; i < blk.awnings.length && awningCount < MAX_AWNINGS; i++) {
         const a = blk.awnings[i];
+        dummy.rotation.set(0, a.ry ?? blk.ry ?? 0, 0);
         dummy.position.set(a.x, a.y, a.z);
         dummy.scale.set(a.w, 0.75, a.d);
         dummy.updateMatrix();
@@ -2469,7 +2602,7 @@ function buildCityBlocks(scene) {
           signInsts[themeIdx].setMatrixAt(signCounts[themeIdx]++, dummy.matrix);
         }
         if (collectNearLights) {
-          activeAwnings.push({ a, themeIdx, ry: blk.ry || 0 });
+          activeAwnings.push({ a, themeIdx, ry: a.ry ?? blk.ry ?? 0 });
         }
         awningCount++;
       }

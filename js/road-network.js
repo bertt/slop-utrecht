@@ -5,7 +5,10 @@ import {
   STREETS,
   ISLAND_BOUNDS,
   getIslandBoundsAtZ,
-  BLOCKS
+  BLOCKS,
+  waterAt,
+  nearestRoads,
+  sidewalkAt
 } from './city-config.js';
 import { GEO } from './nyc-geodata.js';
 
@@ -49,11 +52,22 @@ function buildRoadNetwork(sidewalks, obstacles) {
         const list = hash.get(cellKey(ix, iz));
         if (!list) continue;
         for (const r of list) {
-          if (r.minX < maxX && r.maxX > minX && r.minZ < maxZ && r.maxZ > minZ && fn(r)) return true;
+          if (r.minX < maxX && r.maxX > minX && r.minZ < maxZ && r.maxZ > minZ && overlapsFootprint(r,minX,maxX,minZ,maxZ) && fn(r)) return true;
         }
       }
     }
     return false;
+  }
+
+  // Berlin facades follow surveyed edges. Test their true oriented rectangles,
+  // so a diagonal facade's large axis-aligned bounds cannot block the street.
+  function overlapsFootprint(r,minX,maxX,minZ,maxZ) {
+    if (!r.obb) return true;
+    const {cx,cz,hx,hz,cs,sn}=r.obb;
+    const x=(minX+maxX)/2-cx,z=(minZ+maxZ)/2-cz;
+    const ax=(maxX-minX)/2,az=(maxZ-minZ)/2;
+    return Math.abs(x*cs-z*sn)<=hx+ax*Math.abs(cs)+az*Math.abs(sn) &&
+      Math.abs(x*sn+z*cs)<=hz+ax*Math.abs(sn)+az*Math.abs(cs);
   }
 
   function onLand(minX, maxX, minZ, maxZ) {
@@ -61,12 +75,19 @@ function buildRoadNetwork(sidewalks, obstacles) {
       const shore = getIslandBoundsAtZ(z);
       if (minX < shore.westX + SHORE_MARGIN || maxX > shore.eastX - SHORE_MARGIN) return false;
     }
+    // Berlin's Spree crosses the district instead of surrounding it. The original
+    // lane/footprint checks remain unchanged; mapped bridges supply a land surface.
+    if (GEO.city === 'Utrecht') {
+      for (const [x, z] of [[minX,minZ],[minX,maxZ],[maxX,minZ],[maxX,maxZ]]) {
+        if (waterAt(x,z) && !nearestRoads(x,z,35).some(q => q.road.bridge && q.dist <= q.road.w/2+1)) return false;
+      }
+    }
     return true;
   }
 
   const blocked = (minX, maxX, minZ, maxZ) => !onLand(minX, maxX, minZ, maxZ) || query(minX, maxX, minZ, maxZ, () => true);
   const walkable = (minX, maxX, minZ, maxZ) => onLand(minX, maxX, minZ, maxZ) && !query(minX, maxX, minZ, maxZ, (r) => !r.curb);
-  const onSidewalk = (x, z) => query(x, x, z, z, (r) => r.curb);
+  const onSidewalk = (x, z) => GEO.city === 'Utrecht' ? !!sidewalkAt(x,z) : query(x, x, z, z, (r) => r.curb);
   // The same test for the centreline streets (4b), which follow the real streets: the rectangles standing in for
   // irregular sidewalks may reach a little past their curbs, a whole park's bounds take in the streets around it and a
   // median mall's bounds (Allen St, Chrystie St...) both its roadways, so only a curb right at (x, z), median malls by
@@ -1076,6 +1097,16 @@ function buildRoadNetwork(sidewalks, obstacles) {
       const n = nodes.find((m) => Math.abs(m.x - a.x) < 4 && Math.abs(m.z - s.z) < 4);
       if (n) n.signal = true;
     }
+  }
+  // The same signal/right-of-way system uses the mapped Berlin signal locations.
+  if (GEO.city === 'Utrecht') for (const p of GEO.berlin.signals || []) {
+    let best = null, distance = 48;
+    for (const n of nodes) {
+      if (n.shape || !n.in || !n.out) continue;
+      const d = Math.hypot(n.x-p.x,n.z-p.z);
+      if (d < distance) { best=n; distance=d; }
+    }
+    if (best) best.signal=true;
   }
 
   // 9. Sides & right of way at each node, for traffic.js. Its arms are its sides (one crosswalk and approach each): a

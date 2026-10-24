@@ -5,7 +5,10 @@ import {
   getIslandBoundsAtZ,
   isTypingInField,
   blockAt,
-  streetZ
+  streetZ,
+  defaultSpawn,
+  waterAt,
+  nearestRoads
 } from './city-config.js';
 import { cityUniforms, createCarPaintMaterial, createContactShadowMaterial } from './tsl-materials.js';
 import {
@@ -32,7 +35,13 @@ import { bryantParkLawn } from './landmarks.js';
 // 4. Helicopter (Manhattan Sightseeing Twin-Turbine Chopper)
 
 // Spawn on 5th Ave at 37th St, facing south down the avenue toward the Empire State Building (34th St)
-const SPAWN_Z = streetZ(37);
+const SPAWN_Z = defaultSpawn?.z ?? streetZ(37);
+const SPAWN_X = defaultSpawn?.x ?? 0;
+const SPAWN_HEADING = defaultSpawn?.heading ?? 0;
+function spawnPosition(lateral, forward, y) {
+  const sn = Math.sin(SPAWN_HEADING), cs = Math.cos(SPAWN_HEADING);
+  return new THREE.Vector3(SPAWN_X + lateral * cs + forward * sn, y, SPAWN_Z - lateral * sn + forward * cs);
+}
 const groundCollider = { type: 'ground' };
 
 const CAR_DRIVE = {
@@ -132,27 +141,27 @@ function createTaxiDoorDecalTexture() {
   c.width = 256;
   c.height = 128;
   const ctx = c.getContext('2d');
-  ctx.fillStyle = '#ffbe14';
+  ctx.fillStyle = '#e5d7b5';
   ctx.fillRect(0, 0, 256, 128);
   // Black T&LC circle emblem
   ctx.fillStyle = '#111317';
   ctx.beginPath();
   ctx.arc(58, 64, 42, 0, Math.PI * 2);
   ctx.fill();
-  ctx.fillStyle = '#ffbe14';
+  ctx.fillStyle = '#e5d7b5';
   ctx.font = '900 32px Inter, Arial, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText('T', 58, 66);
-  // NYC TAXI typography & Fare Rate
+  // Taxi roof sign typography & fare rate
   ctx.fillStyle = '#111317';
   ctx.textAlign = 'left';
   ctx.font = '900 26px Inter, Arial, sans-serif';
-  ctx.fillText('NYC TAXI', 112, 42);
+  ctx.fillText('UTRECHT TAXI', 112, 42);
   ctx.font = '700 15px JetBrains Mono, monospace';
-  ctx.fillText('7Y48 · MEDALLION', 112, 68);
+  ctx.fillText('UTRECHT · TAXI', 112, 68);
   ctx.font = '600 13px Inter, Arial, sans-serif';
-  ctx.fillText('$3.00 INITIAL FARE', 112, 90);
+  ctx.fillText('TAXI UTRECHT', 112, 90);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
@@ -163,19 +172,20 @@ function createNYLicensePlateTexture() {
   c.width = 256;
   c.height = 128;
   const ctx = c.getContext('2d');
-  ctx.fillStyle = '#ffb81c';
+  ctx.fillStyle = '#f1f1e9';
   ctx.fillRect(0, 0, 256, 128);
-  ctx.fillStyle = '#0d2244';
-  ctx.fillRect(6, 6, 244, 24);
-  ctx.fillStyle = '#ffb81c';
-  ctx.font = '800 15px Inter, Arial, sans-serif';
+  ctx.strokeStyle = '#171c21';
+  ctx.lineWidth = 5;
+  ctx.strokeRect(3, 3, 250, 122);
+  ctx.fillStyle = '#154795';
+  ctx.fillRect(7, 7, 26, 114);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '700 22px Arial, sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText('NEW YORK', 128, 23);
-  ctx.fillStyle = '#0d2244';
-  ctx.font = '900 48px JetBrains Mono, monospace';
-  ctx.fillText('7Y48A', 128, 82);
-  ctx.font = '700 13px Inter, Arial, sans-serif';
-  ctx.fillText('NYC T&LC', 128, 114);
+  ctx.fillText('D', 20, 91);
+  ctx.fillStyle = '#111820';
+  ctx.font = '700 42px Arial, sans-serif';
+  ctx.fillText('B · TX 187', 143, 80);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
@@ -396,6 +406,7 @@ class ThirdPersonControllerManager {
     };
     const clear = (p) => {
       if (!p) return false;
+      if (!heli && this.isUnbridgedWater(p.x, p.z)) return false;
       const baseY = heli ? altitude : this.getGroundHeight(p.x, p.z, this.activeMode);
       // Keep other player models out of both the arrival and its default chase view. A corridor also prevents a
       // parked car between camera and character from hiding the character even when the camera itself is outside it.
@@ -454,8 +465,8 @@ class ThirdPersonControllerManager {
       mesh: root,
       crowd,
       rig,
-      position: new THREE.Vector3(-11.6, ISLAND_BOUNDS.sidewalkHeight, SPAWN_Z + 12),
-      heading: 0,
+      position: spawnPosition(5.2, 8, ISLAND_BOUNDS.sidewalkHeight),
+      heading: SPAWN_HEADING,
       speed: 0,
       verticalVel: 0,
       cameraTargetOffset: new THREE.Vector3(0, 1.55, 0),
@@ -475,7 +486,7 @@ class ThirdPersonControllerManager {
     root.add(chassisPivot);
 
     const spec = BODY_SPECS.taxi;
-    const taxiLoftMat = createLoftedCarMaterial(spec, 0xffbe14);
+    const taxiLoftMat = createLoftedCarMaterial(spec, 0x2a2e33);  // player taxi: black, like many taxis
 
     // 1. 3D Lofted Taxi Body + Curved Windscreens + Crowned Roof + Side Mirrors + Roof Sign
     const carBodyGeo = buildCarGeometry(spec, false);
@@ -556,14 +567,14 @@ class ThirdPersonControllerManager {
 
     return {
       type: 'car',
-      label: 'NYC Yellow Taxi',
+      label: 'Utrecht Taxi',
       mesh: root,
       chassisPivot,
       carState,
       headLights,
       wheels,
-      position: new THREE.Vector3(3.6, 0.0, SPAWN_Z + 12),
-      heading: 0,
+      position: spawnPosition(0, 0, 0),
+      heading: SPAWN_HEADING,
       speed: 0,
       vx: 0,
       vz: 0,
@@ -717,7 +728,7 @@ class ThirdPersonControllerManager {
 
     return {
       type: 'cyclist',
-      label: 'NYC Bike Lane Cyclist',
+      label: 'Utrecht Cyclist',
       mesh: root,
       leanPivot,
       frontWheel,
@@ -729,8 +740,8 @@ class ThirdPersonControllerManager {
       riderRig,
       helmet,
       headLight,
-      position: new THREE.Vector3(5.2, 0.0, SPAWN_Z - 8),
-      heading: 0,
+      position: spawnPosition(1, -12, 0),
+      heading: SPAWN_HEADING,
       speed: 0,
       leanAngle: 0,
       pedalPhase: 0,
@@ -813,8 +824,8 @@ class ThirdPersonControllerManager {
       tiltPivot,
       mainRotorPivot,
       tailRotorPivot,
-      position: new THREE.Vector3(-110, 96, SPAWN_Z - 60),
-      heading: 0.62,
+      position: spawnPosition(-60, -80, 96),
+      heading: SPAWN_HEADING,
       speed: 0,
       verticalSpeed: 0,
       pitchAngle: 0,
@@ -831,11 +842,16 @@ class ThirdPersonControllerManager {
     return !!b && !(b.park > 0.6 && !b.median);
   }
 
+  isUnbridgedWater(x, z) {
+    return typeof waterAt === 'function' && waterAt(x, z) &&
+      !(typeof nearestRoads === 'function' && nearestRoads(x, z, 25).some(({road, dist}) => road.bridge && dist < road.w / 2 + 1));
+  }
+
   getGroundHeight(x, z, mode = 'person') {
     // Inside Central Park (5th Ave to Central Park West, 59th St to 110th St)
     const cp = CENTRAL_PARK_BOUNDS;
     if (x > cp.minX && x < cp.maxX && z > cp.minZ && z < cp.maxZ) {
-      return 1.24;
+      return 0.22;
     }
     // Inside Bryant Park's Great Lawn (west of the New York Public Library, 40th-42nd St)
     const lawn = bryantParkLawn;
@@ -890,7 +906,15 @@ class ThirdPersonControllerManager {
   resolveHorizontalCollision(pos, radius, carEntity = null, entity = carEntity) {
     // The detailed island (the helicopter may roam out over the harbour & the boroughs)
     const heli = this.activeMode === 'helicopter';
-    const m = heli ? 6000 : 0;
+    if (!heli && this.isUnbridgedWater(pos.x, pos.z)) {
+      const last = entity?._lastDryPosition;
+      if (last) { pos.x = last.x; pos.z = last.z; }
+      if (entity) { entity.speed *= 0.2; if ('vx' in entity) { entity.vx *= 0.2; entity.vz *= 0.2; } }
+    } else if (entity) {
+      entity._lastDryPosition ??= {x: pos.x, z: pos.z};
+      entity._lastDryPosition.x = pos.x; entity._lastDryPosition.z = pos.z;
+    }
+    const m = heli ? 1200 : 0;
     pos.x = Math.max(ISLAND_BOUNDS.minX - m, Math.min(ISLAND_BOUNDS.maxX + m, pos.x));
     pos.z = Math.max(ISLAND_BOUNDS.minZ + (heli ? -6000 : 30), Math.min(ISLAND_BOUNDS.maxZ + m, pos.z));
     if (this.activeMode !== 'helicopter' && getIslandBoundsAtZ) {

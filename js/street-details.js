@@ -10,12 +10,15 @@ import {
   fromOldFrame,
   CENTRAL_PARK_BOUNDS as CPB,
   BLOCKS,
-  LANDMARK_SITES
+  LANDMARK_SITES,
+  BERLIN_DATA,
+  waterAt
 } from './city-config.js';
 import { cityUniforms, createSteamMaterial, createTreeGrateMaterial, createGodRayMaterial } from './tsl-materials.js';
 import { createTreeField } from './trees.js';
-import { pavedPlazaRects, centralParkClearings, parkTreeSites, sidewalkBlocks, parkLampSites } from './city-grid.js';
+import { pavedPlazaRects, centralParkClearings, parkTreeSites, sidewalkBlocks, parkLampSites, berlinStreetSites } from './city-grid.js';
 import { bryantParkLawn } from './landmarks.js';
+import { nearestBerlinRoad } from './berlin-geometry.js';
 
 // js/street-details.js
 // Populates Manhattan streets with authentic NYC street furniture using InstancedMesh:
@@ -31,13 +34,13 @@ function createStreetSignBladeTexture(label) {
   c.width = 256;
   c.height = 64;
   const ctx = c.getContext('2d');
-  ctx.fillStyle = '#0d6b3f';
+  ctx.fillStyle = BERLIN_DATA ? '#eeeeeb' : '#0d6b3f';
   ctx.fillRect(0, 0, 256, 64);
-  ctx.strokeStyle = '#ffffff';
+  ctx.strokeStyle = BERLIN_DATA ? '#242829' : '#ffffff';
   ctx.lineWidth = 5;
   ctx.strokeRect(4, 4, 248, 56);
-  ctx.fillStyle = '#ffffff';
-  ctx.font = '800 30px Inter, Arial, sans-serif';
+  ctx.fillStyle = BERLIN_DATA ? '#242829' : '#ffffff';
+  ctx.font = `${BERLIN_DATA ? 600 : 800} ${label.length > 22 ? 19 : label.length > 16 ? 23 : 30}px Inter, Arial, sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(label, 128, 34);
@@ -104,7 +107,7 @@ function createWalkSignalMaterial(clock) {
 
 function buildStreetDetails(scene) {
   const group = new THREE.Group();
-  group.name = 'ManhattanStreetDetails';
+  group.name = BERLIN_DATA ? 'BerlinStreetDetails' : 'ManhattanStreetDetails';
 
   const dummy = new THREE.Object3D();
   const unitBox = new THREE.BoxGeometry(1, 1, 1);
@@ -138,7 +141,7 @@ function buildStreetDetails(scene) {
   const pedGlobeGlow = new THREE.MeshBasicNodeMaterial();
   pedGlobeGlow.colorNode = mix(color(0xd4d2c8), color(0xffe4b0).mul(1.95), smoothstep(0.4, 1.1, cityUniforms.uInteriorGlow));
   const streetBladeMat = new THREE.MeshStandardNodeMaterial({
-    map: createStreetSignBladeTexture('5TH AVE · 42 ST'),
+    map: createStreetSignBladeTexture(BERLIN_DATA ? 'UTRECHT · BINNENSTAD' : '5TH AVE · 42 ST'),
     roughness: 0.32
   });
 
@@ -318,7 +321,7 @@ function buildStreetDetails(scene) {
   //    Placed directly along the true curb edges of every city block (BLOCKS)
   //    and verified with blockAt(x, z) so no pole ever stands in any roadway.
   // =========================================================================
-  const allBlocks = BLOCKS || [];
+  const allBlocks = BERLIN_DATA ? [] : BLOCKS || [];
   const detailZMin = streetZ(61);
   const detailZMax = streetZ(14);
 
@@ -473,6 +476,50 @@ function buildStreetDetails(scene) {
     }
   }
 
+  const berlinSignMatrices = new Map();
+  if (BERLIN_DATA) {
+    const expansionStreetSigns = new Set(['Schlesische Straße', 'Skalitzer Straße', 'Kreuzbergstraße', 'Kottbusser Damm',
+      'Oranienstraße', 'Bergmannstraße', 'Karl-Marx-Allee', 'Frankfurter Allee', 'Warschauer Straße', 'Boxhagener Straße',
+      'Spandauer Damm', 'Otto-Suhr-Allee', 'Bismarckstraße', 'Kantstraße', 'Tauentzienstraße', 'Kurfürstendamm', 'Straße des 17. Juni']);
+    const setMatrix = (list, x, y, z, sx, sy, sz, yaw = 0) => {
+      dummy.position.set(x, y, z); dummy.rotation.set(0, yaw, 0); dummy.scale.set(sx, sy, sz);
+      dummy.updateMatrix(); list.push(dummy.matrix.clone());
+    };
+    for (let i = 0; i < berlinStreetSites.length; i++) {
+      const s = berlinStreetSites[i];
+      if (waterAt(s.x, s.z) && !s.road.bridge) continue;
+      const block = blockAt(s.x, s.z);
+      if (block && !block.sidewalk && !block.id?.toString().startsWith('sidewalk') && block.source && !block.park) continue;
+      setMatrix(poleMatrices, s.x, 4.1, s.z, 0.11, 8.2, 0.11);
+      const yaw = Math.atan2(-s.nz, s.nx);
+      setMatrix(armMatrices, s.x + s.nx * 1.1, 8.08, s.z + s.nz * 1.1, 2.2, 0.085, 0.085, yaw);
+      setMatrix(lampHeadMatrices, s.x + s.nx * 2.1, 8.1, s.z + s.nz * 2.1, 1, 1, 1, yaw);
+      cobraLampSites.push({ x: s.x + s.nx * 2.1, y: 8.04, z: s.z + s.nz * 2.1, tx: s.x + s.nx * 3.5, tz: s.z + s.nz * 3.5 });
+      placedPoles.push({ x: s.x, z: s.z });
+      if (s.name && i % 4 === 0 && (berlinSignMatrices.has(s.name) || berlinSignMatrices.size < 70 || expansionStreetSigns.has(s.name))) {
+        if (!berlinSignMatrices.has(s.name)) berlinSignMatrices.set(s.name, []);
+        setMatrix(berlinSignMatrices.get(s.name), s.x, 3.25, s.z, 1.8, 0.33, 0.055, -Math.atan2(s.uz, s.ux));
+      }
+    }
+    const signalKeys = new Set();
+    for (const signal of BERLIN_DATA.signals || []) {
+      const road = nearestBerlinRoad(signal.x, signal.z, 28);
+      if (!road) continue;
+      const nx = -road.uz, nz = road.ux;
+      const side = ((signal.x - road.x) * nx + (signal.z - road.z) * nz) < 0 ? -1 : 1;
+      const x = road.x + nx * side * (road.width / 2 + 0.7), z = road.z + nz * side * (road.width / 2 + 0.7);
+      const key = `${Math.round(x / 7)}/${Math.round(z / 7)}`;
+      if (signalKeys.has(key)) continue;
+      signalKeys.add(key);
+      const yaw = Math.atan2(road.ux, road.uz), isAvenue = Math.abs(road.uz) >= Math.abs(road.ux);
+      setMatrix(poleMatrices, x, 3.0, z, 0.09, 6, 0.09);
+      setMatrix(yellowBoxMatrices, x, 5.42, z, 1, 1, 1, yaw);
+      setMatrix(isAvenue ? aveLensMatrices : streetLensMatrices, x, 5.42, z, 1, 1, 1, yaw);
+      setMatrix(walkBoxMatrices, x, 2.7, z, 1, 1, 1, yaw + Math.PI / 2);
+      audioSignals.push({ x, y: 2.7, z, isAvenue });
+    }
+  }
+
   function addMatrixArrayInstanced(geo, mat, matrices, castShadow = true) {
     if (matrices.length === 0) return;
     const inst = new THREE.InstancedMesh(geo, mat, matrices.length);
@@ -499,13 +546,17 @@ function buildStreetDetails(scene) {
   addMatrixArrayInstanced(lampLensGeo, lampBulbGlow, lampHeadMatrices, false);
   addMatrixArrayInstanced(pedLampPostGeo, poleMetalMat, pedPostMatrices);
   addMatrixArrayInstanced(pedGlobeGeo, pedGlobeGlow, pedPostMatrices, false);
+  for (const [name, matrices] of berlinSignMatrices) {
+    const mat = new THREE.MeshStandardNodeMaterial({ map: createStreetSignBladeTexture(name), roughness: 0.6 });
+    addMatrixArrayInstanced(unitBox, mat, matrices);
+  }
 
   // =========================================================================
   // 2B. VOLUMETRIC GOLDEN-HOUR CANYON SUN SHAFTS (GOD RAYS)
   // =========================================================================
   const godRayMat = createGodRayMaterial();
   const godRayGeo = new THREE.PlaneGeometry(54, 92);
-  const canyonShafts = [
+  const canyonShafts = BERLIN_DATA ? berlinStreetSites.filter(s => /Oudegracht|Vredenburg|Lange Viestraat|Catharijnesingel/.test(s.name)).filter((s, i) => i % 9 === 0).slice(0, 8).map(s => ({ x: s.x, y: 24, z: s.z, rotY: Math.atan2(s.ux, s.uz), rotZ: -0.44 })) : [
     { x: 0,    y: 42, z: 180,  rotY: 0.32,  rotZ: -0.46 }, // 34th St & 5th Ave (Empire State Canyon)
     { x: 0,    y: 44, z: 0,    rotY: 0.28,  rotZ: -0.44 }, // 42nd St & 5th Ave (NYPL / Bryant Park)
     { x: 165,  y: 46, z: 0,    rotY: 0.25,  rotZ: -0.45 }, // 42nd St & Park/Lexington (Grand Central & Chrysler)
@@ -525,7 +576,7 @@ function buildStreetDetails(scene) {
   // 3. CON EDISON ORANGE/WHITE STRIPED STEAM STACKS, NYCDOT SAWHORSE BARRICADES
   //    & BILLOWING WIND-DRIFTED VOLUMETRIC STEAM CLOUD TRAILS (REFERENCE PHOTO!)
   // =========================================================================
-  const steamLocations = [
+  const steamLocations = BERLIN_DATA ? [] : [
     { x: 6.4,   z: 96,   windX: -1.0, windZ: -0.18 }, // 5th Ave & 37th St (Buffer zone clear of green bike lane!)
     { x: -7.5,  z: 148,  windX: 0.95, windZ: -0.22 }, // 5th Ave near 34th St (Empire State Building)
     { x: 6.4,   z: 48,   windX: -1.0, windZ: 0.15  }, // 5th Ave & 40th St (NYPL / Bryant Park)
@@ -667,7 +718,7 @@ function buildStreetDetails(scene) {
   steamInstancedSprites.count = totalSteamSprites;
   steamInstancedSprites.frustumCulled = false;
   steamInstancedSprites.renderOrder = 2;
-  group.add(steamInstancedSprites);
+  if (totalSteamSprites) group.add(steamInstancedSprites);
 
   // =========================================================================
   // 4. MTA SUBWAY ENTRANCES WITH GLOWING GREEN GLOBE LAMPS
@@ -679,7 +730,7 @@ function buildStreetDetails(scene) {
   });
   const subwayGlobeMat = new THREE.MeshBasicNodeMaterial({ color: 0x55ff88 });
 
-  const subwayLocations = [
+  const subwayLocations = BERLIN_DATA ? [] : [
     [-16.5, 162],  // 34th St - Herald Sq / 5th Ave
     [16.5, 162],
     [-16.5, 16],   // 42nd St - Bryant Park / 5th Ave
@@ -752,7 +803,7 @@ function buildStreetDetails(scene) {
     roughness: 0.6
   });
 
-  const cartLocations = [
+  const cartLocations = BERLIN_DATA ? berlinStreetSites.filter(s => /Oudegracht|Steenweg|Lange Viestraat|Voorstraat/.test(s.name)).filter((s, i) => i % 13 === 0).slice(0, 12).map(s => [s.x, s.z]) : [
     [-17, 152],   // Empire State corner
     [-17, 25],    // NYPL / Bryant Park
     [-127, 25],   // 6th Ave & 42nd
@@ -790,6 +841,10 @@ function buildStreetDetails(scene) {
   // =========================================================================
   const hydrantPositions = [];
   const mailboxPositions = [];
+  if (BERLIN_DATA) for (let i = 5; i < berlinStreetSites.length; i += 23) {
+    const s = berlinStreetSites[i];
+    if (!waterAt(s.x, s.z)) mailboxPositions.push([s.x - s.ux * 2, s.z - s.uz * 2]);
+  }
   for (const ave of AVENUES) {
     for (let row = 0; row < STREETS.length - 1; row++) {
       const zMid = (STREETS[row].z + STREETS[row + 1].z) * 0.5;
@@ -803,7 +858,8 @@ function buildStreetDetails(scene) {
   }
 
   const hydrantMat = new THREE.MeshStandardNodeMaterial({ color: 0xb8241e, roughness: 0.5, metalness: 0.4 });
-  const hydrantInst = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.22, 0.26, 0.85, 8), hydrantMat, hydrantPositions.length);
+  const hydrantInst = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.22, 0.26, 0.85, 8), hydrantMat, Math.max(1, hydrantPositions.length));
+  hydrantInst.count = hydrantPositions.length;
   hydrantPositions.forEach(([hx, hz], i) => {
     dummy.position.set(hx, 0.64, hz);
     dummy.rotation.set(0, 0, 0);
@@ -812,10 +868,11 @@ function buildStreetDetails(scene) {
     hydrantInst.setMatrixAt(i, dummy.matrix);
   });
   hydrantInst.instanceMatrix.needsUpdate = true;
-  group.add(hydrantInst);
+  if (hydrantPositions.length) group.add(hydrantInst);
 
-  const uspsMat = new THREE.MeshStandardNodeMaterial({ color: 0x183c7a, roughness: 0.45, metalness: 0.35 });
-  const mailboxInst = new THREE.InstancedMesh(new THREE.BoxGeometry(0.65, 1.25, 0.65), uspsMat, mailboxPositions.length);
+  const uspsMat = new THREE.MeshStandardNodeMaterial({ color: BERLIN_DATA ? 0xe4b92e : 0x183c7a, roughness: 0.45, metalness: 0.35 });
+  const mailboxInst = new THREE.InstancedMesh(new THREE.BoxGeometry(0.65, 1.25, 0.65), uspsMat, Math.max(1, mailboxPositions.length));
+  mailboxInst.count = mailboxPositions.length;
   mailboxPositions.forEach(([mx, mz], i) => {
     dummy.position.set(mx, 0.84, mz);
     dummy.scale.set(1, 1, 1);
@@ -823,7 +880,7 @@ function buildStreetDetails(scene) {
     mailboxInst.setMatrixAt(i, dummy.matrix);
   });
   mailboxInst.instanceMatrix.needsUpdate = true;
-  group.add(mailboxInst);
+  if (mailboxPositions.length) group.add(mailboxInst);
 
   // =========================================================================
   // 7. LUSH TREES: PARKS & PLAZAS, CENTRAL PARK WOODLANDS, AVENUE & CROSS-STREET TREES
@@ -836,7 +893,7 @@ function buildStreetDetails(scene) {
 
   // A. Bryant Park: double allées of London planes on the raised terraces along the Great Lawn's north & south sides
   //    and its west end, framing the lawn the library's terrace looks out over (the lawn as fitted by landmarks.js)
-  const bpl = bryantParkLawn;
+  const bpl = BERLIN_DATA ? null : bryantParkLawn;
   if (bpl) {
     const ty = bpl.top - 0.2;
     for (let tx = bpl.minX - 6; tx <= bpl.maxX + 6; tx += 6.5) {
@@ -851,7 +908,7 @@ function buildStreetDetails(scene) {
   }
 
   // B. Central Park (59th to 110th St, 5th Ave to Central Park West; city-config.js CENTRAL_PARK_BOUNDS), on the lawn
-  const cp = CPB;
+  const cp = BERLIN_DATA ? { minX: 1, maxX: -1, minZ: 1, maxZ: -1 } : CPB;
   // B1. Central Park South (59th St) dense woodland border
   for (let tx = cp.minX + 8; tx <= cp.maxX - 8; tx += 9.5) {
     treePositions.push({ x: tx, y: CP_LAWN_Y, z: cp.maxZ - 5, scale: 0.95, species: 0 });
@@ -1022,8 +1079,10 @@ function buildStreetDetails(scene) {
   const pitGrateGeo = new THREE.RingGeometry(0.24, 0.82, 12, 1).rotateX(-Math.PI / 2);
   const gratedTrees = sidewalkTreePositions.filter((t) => t.grate !== false);
 
-  const pitCurbInst = new THREE.InstancedMesh(pitCurbGeo, pitCurbMat, sidewalkTreePositions.length);
-  const pitSoilInst = new THREE.InstancedMesh(pitSoilGeo, pitSoilMat, sidewalkTreePositions.length);
+  const pitCurbInst = new THREE.InstancedMesh(pitCurbGeo, pitCurbMat, Math.max(1, sidewalkTreePositions.length));
+  const pitSoilInst = new THREE.InstancedMesh(pitSoilGeo, pitSoilMat, Math.max(1, sidewalkTreePositions.length));
+  pitCurbInst.count = sidewalkTreePositions.length;
+  pitSoilInst.count = sidewalkTreePositions.length;
   const pitGrateInst = new THREE.InstancedMesh(pitGrateGeo, grateMat, Math.max(1, gratedTrees.length));
   pitCurbInst.receiveShadow = true;
   pitSoilInst.receiveShadow = true;
@@ -1051,7 +1110,8 @@ function buildStreetDetails(scene) {
   pitSoilInst.instanceMatrix.needsUpdate = true;
   pitGrateInst.instanceMatrix.needsUpdate = true;
   for (const pit of [pitCurbInst, pitSoilInst, pitGrateInst]) pit.computeBoundingSphere();
-  group.add(pitCurbInst, pitSoilInst, pitGrateInst);
+  if (sidewalkTreePositions.length) group.add(pitCurbInst, pitSoilInst);
+  if (gratedTrees.length) group.add(pitGrateInst);
 
   function hashPos(x, y, z) {
     const s = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453;
@@ -1101,6 +1161,25 @@ function buildStreetDetails(scene) {
 
   const activeCobras = [];
   const activePoints = [];
+  // Fixed light pools still choose the nearest lamps, using only nearby cells
+  // as candidates as the mapped city grows.
+  const lightCells = sites => {
+    const cells = new Map();
+    for (const site of sites) {
+      const key = `${Math.floor(site.x / 128)}/${Math.floor(site.z / 128)}`;
+      if (!cells.has(key)) cells.set(key, []);
+      cells.get(key).push(site);
+    }
+    return cells;
+  };
+  const cobraCells = lightCells(cobraLampSites), pointCells = lightCells(streetPointSites);
+  function* nearbyLights(cells, x, z, radius) {
+    for (let ix = Math.floor((x - radius) / 128); ix <= Math.floor((x + radius) / 128); ix++) {
+      for (let iz = Math.floor((z - radius) / 128); iz <= Math.floor((z + radius) / 128); iz++) {
+        yield* cells.get(`${ix}/${iz}`) || [];
+      }
+    }
+  }
 
   function smoothFade(d, start, end) {
     const t = Math.min(1, Math.max(0, (end - d) / (end - start)));
@@ -1132,8 +1211,7 @@ function buildStreetDetails(scene) {
     const fwdZ = -me[10];
 
     let cobraCount = 0;
-    for (let i = 0; i < cobraLampSites.length; i++) {
-      const s = cobraLampSites[i];
+    for (const s of nearbyLights(cobraCells, cx, cz, STREETLIGHT_DIST)) {
       const dx = s.x - cx;
       const dz = s.z - cz;
       const d2 = dx * dx + dz * dz + cy * cy;
@@ -1167,8 +1245,7 @@ function buildStreetDetails(scene) {
     }
 
     let ptCount = 0;
-    for (let i = 0; i < streetPointSites.length; i++) {
-      const s = streetPointSites[i];
+    for (const s of nearbyLights(pointCells, cx, cz, STREET_POINT_DIST)) {
       const dx = s.x - cx;
       const dz = s.z - cz;
       const d2 = dx * dx + dz * dz + cy * cy;
