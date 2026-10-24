@@ -723,7 +723,7 @@ async function initApp() {
         window.__slopwaw = {
           ready: true, firstFrameAt: performance.now(), init: initTimings.join(', '),
           backend: renderer.backend.isWebGPUBackend ? 'WebGPU' : 'WebGL fallback',
-          scene, renderer, cameraSystem, controllerManager, TELEPORT_LOCATIONS,
+          scene, renderer, cameraSystem, controllerManager, TELEPORT_LOCATIONS, trafficSystem,
           teleport(key) { const l = TELEPORT_LOCATIONS[key]; return teleportTo(l.x, l.z, l.heading); },
           teleportXZ(x, z, heading = 0) { return teleportTo(x, z, heading); },
           mode(m) { selectMode(m); },

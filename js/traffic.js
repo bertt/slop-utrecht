@@ -20,6 +20,7 @@ import {
   createLoftedBusMaterial
 } from './actor-models.js';
 import { PersonCrowd, PersonRig } from './pedestrians.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 // js/traffic.js
 // Manhattan traffic and pedestrians on the road graph road-network.js derives from the city as built:
@@ -31,9 +32,10 @@ import { PersonCrowd, PersonRig } from './pedestrians.js';
 // - Fixed-size local populations replenish distant roads and sidewalks in every direction, protecting the near view.
 // - The player's vehicle or character pushes and is pushed by the traffic (SAT contact, impulses, sparks).
 
-const NUM_CARS = 200;
-const NUM_BUSES = 12;
-const NUM_PEDS = 340;
+const NUM_CARS = 450;
+const NUM_BUSES = 16;
+const NUM_BIKES = 160;
+const NUM_PEDS = 500;
 
 // Intelligent Driver Model: max acceleration, comfortable braking, time headway, standstill gap; and the sideways
 // acceleration drivers accept in bends, which sets how fast they take each turn or lane shift
@@ -310,8 +312,83 @@ function createTrafficSystem(scene, sidewalks, obstacles) {
 
   const buses = [];
   for (let i = 0; i < NUM_BUSES; i++) buses.push(createVehicle(true, 6.0, 1.3, 3.6, BUS_DRIVER, 8 + (i % 3)));
-  const vehicles = [...cars, ...buses];
   group.add(busBodyInst, busHeaderInst, busWheelLeftInst, busWheelRightInst);
+
+  // Bicycles: upright Dutch bikes with a seated rider that share the traffic lanes at 16-23 km/h. The bike frame and
+  // the rider's clothes are tinted per instance (their vertex colour is white), the wheels, legs and head are not.
+  const BIKE_DRIVER = { a: 1.0, b: 2.0, T: 1.0, s0: 1.5, aLat: 2.0 };
+  const paintGeo = (g, r, gr, b) => {
+    const n = g.attributes.position.count;
+    const c = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) { c[i * 3] = r; c[i * 3 + 1] = gr; c[i * 3 + 2] = b; }
+    g.setAttribute('color', new THREE.BufferAttribute(c, 3));
+    return g;
+  };
+  const limb = (a, b, r, rgb) => {
+    const va = new THREE.Vector3(...a);
+    const vb = new THREE.Vector3(...b);
+    const dir = vb.clone().sub(va);
+    const g = new THREE.CylinderGeometry(r, r, dir.length(), 6, 1);
+    g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize()));
+    g.translate((va.x + vb.x) / 2, (va.y + vb.y) / 2, (va.z + vb.z) / 2);
+    return paintGeo(g, ...rgb);
+  };
+  const WHITE = [1, 1, 1];
+  const DARK = [0.07, 0.08, 0.1];
+  const NAVY = [0.08, 0.1, 0.18];
+  const SKIN = [0.82, 0.62, 0.5];
+  const wheel = (z) => paintGeo(new THREE.TorusGeometry(0.34, 0.03, 6, 18).rotateY(Math.PI / 2).translate(0, 0.36, z), ...DARK);
+  const bikeGeo = mergeGeometries([
+    wheel(0.55), wheel(-0.55),
+    limb([0, 0.98, -0.28], [0, 0.34, -0.145], 0.022, WHITE),
+    limb([0, 0.34, -0.145], [0, 0.36, -0.55], 0.018, WHITE),
+    limb([0, 0.98, -0.28], [0, 0.36, -0.55], 0.018, WHITE),
+    limb([0, 0.98, -0.28], [0, 0.95, 0.42], 0.022, WHITE),
+    limb([0, 0.34, -0.145], [0, 0.72, 0.45], 0.026, WHITE),
+    limb([0, 0.98, 0.42], [0, 0.36, 0.55], 0.02, DARK),
+    limb([-0.22, 1.02, 0.4], [0.22, 1.02, 0.4], 0.017, DARK),
+    limb([0, 1.0, -0.38], [0, 1.0, -0.18], 0.05, DARK)
+  ]);
+  const riderGeo = mergeGeometries([
+    paintGeo(new THREE.CapsuleGeometry(0.11, 0.3, 4, 8).rotateX(0.59).translate(0, 1.21, -0.14), ...WHITE),
+    limb([0.18, 1.4, 0], [0.22, 1.02, 0.4], 0.035, WHITE),
+    limb([-0.18, 1.4, 0], [-0.22, 1.02, 0.4], 0.035, WHITE),
+    limb([0.1, 1.0, -0.28], [0.12, 0.78, 0.0], 0.065, NAVY),
+    limb([-0.1, 1.0, -0.28], [-0.12, 0.78, 0.0], 0.065, NAVY),
+    limb([0.12, 0.78, 0.0], [0.1, 0.38, -0.15], 0.05, NAVY),
+    limb([-0.12, 0.78, 0.0], [-0.1, 0.38, -0.15], 0.05, NAVY)
+  ]);
+  const skinGeo = mergeGeometries([
+    paintGeo(new THREE.SphereGeometry(0.105, 10, 8).translate(0, 1.58, 0.1), ...SKIN),
+    paintGeo(new THREE.SphereGeometry(0.04, 6, 6).translate(0.22, 1.02, 0.4), ...SKIN),
+    paintGeo(new THREE.SphereGeometry(0.04, 6, 6).translate(-0.22, 1.02, 0.4), ...SKIN)
+  ]);
+  const bikeMat = new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.15 });
+  const bikeInst = new THREE.InstancedMesh(bikeGeo, bikeMat, NUM_BIKES);
+  const riderInst = new THREE.InstancedMesh(riderGeo, bikeMat, NUM_BIKES);
+  const skinInst = new THREE.InstancedMesh(skinGeo, bikeMat, NUM_BIKES);
+  const bikeMeshes = [bikeInst, riderInst, skinInst];
+  const bikePalette = [0x15181c, 0x2b2f36, 0x6e1f24, 0x1d3b6c, 0xb9c0c8, 0x2f5d3a].map((c) => new THREE.Color(c));
+  const jacketPalette = [0xd4442f, 0x1d3b6c, 0x2b2f36, 0x3b7a57, 0xe7b52b, 0x7a4a8a, 0xc7ccd4, 0x0f1114].map((c) => new THREE.Color(c));
+  const white = new THREE.Color(1, 1, 1);
+  const bikes = [];
+  for (let i = 0; i < NUM_BIKES; i++) {
+    const bike = createVehicle(false, 0.9, 0.3, 0.55, BIKE_DRIVER, 4.5 + (i % 5) * 0.65);
+    bike.bike = true;
+    bike.slot = i;
+    bikes.push(bike);
+    bikeInst.setColorAt(i, bikePalette[(i * 7) % bikePalette.length]);
+    riderInst.setColorAt(i, jacketPalette[(i * 5) % jacketPalette.length]);
+    skinInst.setColorAt(i, white);
+    for (const m of bikeMeshes) m.setMatrixAt(i, zero);
+  }
+  const bikeShown = new Uint8Array(NUM_BIKES);
+  for (const m of bikeMeshes) {
+    m.frustumCulled = false;
+    m.castShadow = true;
+  }
+  group.add(...bikeMeshes);
+  const vehicles = [...cars, ...buses, ...bikes];
 
   // =========================================================================
   // 3. SKINNED, PROCEDURALLY ANIMATED SIDEWALK PEDESTRIANS (340 PEDESTRIANS, see pedestrians.js)
@@ -1767,6 +1844,16 @@ function createTrafficSystem(scene, sidewalks, obstacles) {
     }
   }
 
+  function renderBike(b) {
+    if (hasView && !visible(b.x, b.z, 6)) return;
+    dummy.position.set(b.x, 0, b.z);
+    dummy.rotation.set(b.pitch, b.yaw + b.yawOffset, b.roll, 'YXZ');
+    dummy.scale.set(1, 1, 1);
+    dummy.updateMatrix();
+    for (const m of bikeMeshes) m.setMatrixAt(b.slot, dummy.matrix);
+    bikeShown[b.slot] = 1;
+  }
+
   function renderBus(b) {
     const rotY = b.yaw + b.yawOffset;
     const sinY = Math.sin(rotY);
@@ -2002,6 +2089,7 @@ function createTrafficSystem(scene, sidewalks, obstacles) {
     visibleCars = 0;
     policeDrawn = 0;
     visibleBuses = 0;
+    bikeShown.fill(0);
     for (let i = 0; i < vehicles.length; i++) {
       const v = vehicles[i];
       if (!v.edge) continue;
@@ -2013,12 +2101,15 @@ function createTrafficSystem(scene, sidewalks, obstacles) {
       locate(v);
       knock(v, dt);
       pose(v, dt);
-      if (player.active) collideWithPlayer(v, v.yaw + v.yawOffset, v.bus ? 1.30 : v.isSUV ? 0.92 : 0.86, v.bus ? 5.72 : v.isSUV ? 2.22 : 2.18);
+      if (player.active) collideWithPlayer(v, v.yaw + v.yawOffset, v.bus ? 1.30 : v.bike ? 0.34 : v.isSUV ? 0.92 : 0.86, v.bus ? 5.72 : v.bike ? 0.95 : v.isSUV ? 2.22 : 2.18);
       if (v.vx * v.vx + v.vz * v.vz > 0.36) knockOn(v);
 
       if (v.bus) renderBus(v);
+      else if (v.bike) renderBike(v);
       else renderCar(v);
     }
+    for (let i = 0; i < NUM_BIKES; i++) if (!bikeShown[i]) for (const m of bikeMeshes) m.setMatrixAt(i, zero);
+    for (const m of bikeMeshes) m.instanceMatrix.needsUpdate = true;
     const hideEmpty = ++updates > 2;
     for (const m of bodyMeshes) {
       const n = m.count;
@@ -2102,6 +2193,7 @@ function createTrafficSystem(scene, sidewalks, obstacles) {
     setCollisionListener,
     cars,
     buses,
+    bikes,
     peds,
     network
   };
