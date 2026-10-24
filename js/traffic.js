@@ -34,8 +34,8 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 const NUM_CARS = 450;
 const NUM_BUSES = 16;
-const NUM_BIKES = 160;
-const NUM_PEDS = 500;
+const NUM_BIKES = 450;
+const NUM_PEDS = 1000;
 
 // Intelligent Driver Model: max acceleration, comfortable braking, time headway, standstill gap; and the sideways
 // acceleration drivers accept in bends, which sets how fast they take each turn or lane shift
@@ -2073,7 +2073,7 @@ function createTrafficSystem(scene, sidewalks, obstacles) {
     // 1. Cars & buses
     // Limit attempted placements, not just successes, and rotate through the pool so an awkward location
     // cannot monopolize a frame. Previous-frame lane lists protect spawn spacing; rebuild before driving.
-    let budget = jump ? vehicles.length : 4;
+    let budget = jump ? vehicles.length : 8;
     for (let scanned = 0; scanned < vehicles.length && budget > 0; scanned++) {
       const v = vehicles[vehicleCursor];
       vehicleCursor = (vehicleCursor + 1) % vehicles.length;
@@ -2158,7 +2158,7 @@ function createTrafficSystem(scene, sidewalks, obstacles) {
     // 2. Pedestrians
     for (const n of walkedNodes) n.walkers.length = 0;
     walkedNodes.length = 0;
-    let pedBudget = jump ? NUM_PEDS : 6;
+    let pedBudget = jump ? NUM_PEDS : 12;
     for (let scanned = 0; scanned < NUM_PEDS && pedBudget > 0; scanned++) {
       const p = peds[pedCursor];
       pedCursor = (pedCursor + 1) % NUM_PEDS;
