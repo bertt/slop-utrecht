@@ -2066,9 +2066,9 @@ function createTrafficSystem(scene, sidewalks, obstacles) {
       player.vx = Math.sin(heading) * speed + (playerEntity.vx || 0);
       player.vz = Math.cos(heading) * speed + (playerEntity.vz || 0);
     }
-    player.halfW = activeMode === 'cyclist' ? 0.35 : activeMode === 'person' ? 0.32 : 0.86;
-    player.halfL = activeMode === 'cyclist' ? 0.85 : activeMode === 'person' ? 0.32 : 2.18;
-    player.push = activeMode === 'cyclist' ? 0.82 : activeMode === 'person' ? 0.88 : 0.50;
+    player.halfW = activeMode === 'cargobike' ? 0.38 : activeMode === 'cyclist' ? 0.35 : activeMode === 'person' ? 0.32 : 0.86;
+    player.halfL = activeMode === 'cargobike' ? 1.34 : activeMode === 'cyclist' ? 0.85 : activeMode === 'person' ? 0.32 : 2.18;
+    player.push = activeMode === 'cargobike' ? 0.82 : activeMode === 'cyclist' ? 0.82 : activeMode === 'person' ? 0.88 : 0.50;
 
     // 1. Cars & buses
     // Limit attempted placements, not just successes, and rotate through the pool so an awkward location

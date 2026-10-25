@@ -1425,7 +1425,7 @@ class PersonRig {
    * Riding a bicycle: `root` (Object3D) is the bike frame (pose in its parent's space, e.g. the scene), `crank` the
    * pedal crank angle. Seat, bars and bottom bracket in the frame's space (metres, +Z forward).
    */
-  ride(root, crank, { seat, bars, gripHalf = 0.22, bracket, crankLength = 0.17 }) {
+  ride(root, crank, { seat, bars, gripHalf = 0.22, bracket, crankLength = 0.17, pedalHalf = 0.1, steerPivot, steerAngle = 0, lean = 0.42 }) {
     const s = this.s;
     const j = this.bind;
     this.gait = 0;
@@ -1435,7 +1435,7 @@ class PersonRig {
     const toWorld = (local) => local.applyQuaternion(_qRoot).add(_rootPos);
 
     // Pelvis on the saddle, leaning forward; chest further forward, head up looking ahead
-    qX(_qPelvis, 0.42).premultiply(_qRoot);
+    qX(_qPelvis, lean).premultiply(_qRoot);
     _pelvis.set(0, seat.y + 0.055 * s, seat.z + 0.03);
     toWorld(_pelvis);
     this.writeBone(BONE.PELVIS, _qPelvis, _pelvis);
@@ -1455,6 +1455,14 @@ class PersonRig {
       const side = SIDES[i];
       _shoulder.copy(j[LIMB.upperArm[i]]).sub(j[BONE.CHEST]).multiplyScalar(s).applyQuaternion(_qChest).add(_chest);
       _target.set(side * gripHalf, bars.y + 0.02, bars.z - 0.07);
+      if (steerAngle) {
+        const pivotX = steerPivot?.x || 0;
+        const pivotZ = steerPivot?.z || 0;
+        const localX = _target.x - pivotX;
+        const localZ = _target.z - pivotZ;
+        const sin = Math.sin(steerAngle), cos = Math.cos(steerAngle);
+        _target.set(localX * cos + localZ * sin + pivotX, _target.y, -localX * sin + localZ * cos + pivotZ);
+      }
       toWorld(_target);
       const l1 = UPPER_ARM * s;
       const l2 = (FOREARM + 0.07) * s;
@@ -1478,7 +1486,7 @@ class PersonRig {
 
       // pedals go round bottom, back, top, front as `crank` grows (pedalling forwards)
       const a = crank + (i === 0 ? 0 : Math.PI);
-      const pedal = _v.set(side * 0.1, bracket.y - Math.cos(a) * crankLength, bracket.z - Math.sin(a) * crankLength);
+      const pedal = _v.set(side * pedalHalf, bracket.y - Math.cos(a) * crankLength, bracket.z - Math.sin(a) * crankLength);
       const footPitch = 0.16 + 0.16 * Math.cos(a) - 0.1 * Math.sin(a);
       qX(_q2, footPitch);
       // ball of the foot on the pedal: ankle = pedal - R * (ball offset from the ankle)

@@ -159,9 +159,14 @@ function advanceWithTouch(mode, strength, reverse) {
     vx: 0, vz: 0, angularVel: 0, steerAngle: 0, pitchVel: 0, rollVel: 0, heaveVel: 0, heaveY: 0, wheelSpin: 0,
     chassisPivot: { rotation: { x: 0, z: 0 }, position: { y: 0 } }, wheels: []
   });
-  if (mode === 'Cyclist') Object.assign(entity, {
+  if (mode === 'Cyclist' || mode === 'CargoBike') Object.assign(entity, {
     leanAngle: 0, leanPivot: { rotation: { z: 0 } },
     frontWheel: { rotation: { x: 0 } }, rearWheel: { rotation: { x: 0 } },
+    frontWheelRadius: mode === 'CargoBike' ? 0.248 : 0.35, rearWheelRadius: mode === 'CargoBike' ? 0.332 : 0.35,
+    ...(mode === 'CargoBike' ? {
+      frontSteerPivot: { rotation: { y: 0 } }, handlebarPivot: { rotation: { y: 0 } },
+      bikeFrame: { steerPivot: { x: 0, z: 0 }, steerAngle: 0 }
+    } : {}),
     pedalPhase: 0, crankPivot: { rotation: { x: 0 } }, pedals: []
   });
   if (mode === 'Helicopter') Object.assign(entity, {
@@ -174,11 +179,12 @@ function advanceWithTouch(mode, strength, reverse) {
   controller.setTouchInput(reverse ? 'backward' : 'forward', strength);
   controller.setTouchInput(reverse ? 'right' : 'left', strength);
   if (mode === 'Helicopter') controller.setTouchInput(reverse ? 'down' : 'up', strength);
-  controller[`update${mode}`](0.1, 0);
+  if (mode === 'Cyclist' || mode === 'CargoBike') controller.updateCyclist(0.1, entity, mode === 'CargoBike' ? 'cargobike' : 'cyclist');
+  else controller[`update${mode}`](0.1, 0);
   return entity;
 }
 
-for (const mode of ['Person', 'Car', 'Cyclist', 'Helicopter']) {
+for (const mode of ['Person', 'Car', 'Cyclist', 'CargoBike', 'Helicopter']) {
   test(`analog ${mode.toLowerCase()} input proportionally scales movement and turning`, () => {
     for (const reverse of [false, true]) {
       const full = advanceWithTouch(mode, 1, reverse);
@@ -193,6 +199,48 @@ for (const mode of ['Person', 'Car', 'Cyclist', 'Helicopter']) {
   });
 }
 
+test('cargo bike wheels spin for their own radii and steering moves the fork, bars and rider grip target together', () => {
+  const { controller } = keyboardHarness();
+  const makeBike = (type, frontWheelRadius, rearWheelRadius, steer = false) => ({
+    type,
+    position: { x: 0, y: 0, z: 0 }, heading: 0, speed: 0, leanAngle: 0,
+    leanPivot: { rotation: { z: 0 } },
+    frontWheel: { rotation: { x: 0 } }, rearWheel: { rotation: { x: 0 } },
+    frontWheelRadius, rearWheelRadius,
+    ...(steer ? {
+      frontSteerPivot: { rotation: { y: 0 } }, handlebarPivot: { rotation: { y: 0 } },
+      bikeFrame: { steerPivot: { x: 0, z: 0 }, steerAngle: 0 }
+    } : {}),
+    pedalPhase: 0,
+    crankPivot: { rotation: { x: 0 } }, pedals: []
+  });
+  const cyclist = makeBike('cyclist', 0.35, 0.35);
+  const cargoBike = makeBike('cargobike', 0.248, 0.332, true);
+  controller.entities = { cyclist, cargobike: cargoBike };
+  controller.getGroundHeight = () => 0;
+  controller.resolveHorizontalCollision = () => {};
+  controller.keys.forward = true;
+  controller.keys.left = true;
+  controller.setMode('cyclist');
+  assert.equal(controller.getActiveEntity(), cyclist);
+  controller.updateCyclist(0.1, cyclist, 'cyclist');
+  const cyclistDistance = cyclist.speed * 0.1;
+  assert.ok(Math.abs(cyclist.frontWheel.rotation.x - cyclistDistance / 0.35) < 1e-10);
+  assert.ok(Math.abs(cyclist.rearWheel.rotation.x - cyclistDistance / 0.35) < 1e-10);
+
+  controller.setMode('cargobike');
+  assert.equal(controller.getActiveEntity(), cargoBike);
+  controller.updateCyclist(0.1, cargoBike, 'cargobike');
+  const distance = cargoBike.speed * 0.1;
+  assert.ok(Math.abs(cargoBike.frontWheel.rotation.x - distance / cargoBike.frontWheelRadius) < 1e-10);
+  assert.ok(Math.abs(cargoBike.rearWheel.rotation.x - distance / cargoBike.rearWheelRadius) < 1e-10);
+  assert.ok(cargoBike.frontWheel.rotation.x > cargoBike.rearWheel.rotation.x, 'the smaller front wheel turns farther over the same distance');
+  assert.equal(cargoBike.frontSteerPivot.rotation.y, 0.34);
+  assert.equal(cargoBike.handlebarPivot.rotation.y, 0.34);
+  assert.equal(cargoBike.bikeFrame.steerAngle, 0.34);
+  assert.equal(cyclist.frontWheel.rotation.x, cyclistDistance / 0.35, 'switching bikes leaves the parked cyclist state intact');
+});
+
 function teleportHarness(mode, colliders = [], shore = () => ({ westX: -500, eastX: 500 })) {
   const harness = keyboardHarness({
     ISLAND_BOUNDS: { minX: -500, maxX: 500, minZ: -500, maxZ: 500, sidewalkHeight: 0.22 },
@@ -203,7 +251,7 @@ function teleportHarness(mode, colliders = [], shore = () => ({ westX: -500, eas
   const { controller } = harness;
   const position = (x = 0, y = 0, z = 0) => ({ x, y, z, copy(p) { this.x = p.x; this.y = p.y; this.z = p.z; } });
   const pivot = () => ({ position: position(), rotation: { x: 0.1, y: 0, z: -0.2 } });
-  const chase = { person: [4.3, 1.95], car: [6.9, 2.12], cyclist: [4.8, 2.05], helicopter: [11.4, 3.3] };
+  const chase = { person: [4.3, 1.95], car: [6.9, 2.12], cyclist: [4.8, 2.05], cargobike: [6.2, 2.35], helicopter: [11.4, 3.3] };
   const ent = {
     type: mode, chaseDistance: chase[mode][0], chaseHeight: chase[mode][1],
     position: position(400, mode === 'helicopter' ? 120 : 0, 400), heading: 1, speed: 20,
@@ -227,7 +275,14 @@ function teleportHarness(mode, colliders = [], shore = () => ({ westX: -500, eas
   return { ...harness, ent };
 }
 
-for (const mode of ['person', 'car', 'cyclist', 'helicopter']) {
+test('cargo bike teleport clearance includes its forward cargo deck and small front wheel', () => {
+  const obstacle = { minX: -0.12, maxX: 0.12, minZ: 0.84, maxZ: 1.04, maxY: 20 };
+  const { controller } = teleportHarness('cargobike', [obstacle]);
+  const arrival = controller.teleportActiveTo(0, 0, 0);
+  assert.notDeepEqual({ ...arrival }, { x: 0, z: 0 }, 'the long frame must clear the obstacle in front of the rider');
+});
+
+for (const mode of ['person', 'car', 'cyclist', 'cargobike', 'helicopter']) {
   test(`${mode} teleport stops carried motion and updates its arrival pose immediately`, () => {
     const { controller, ent, key } = teleportHarness(mode);
     key('keydown', 'KeyW');
@@ -253,7 +308,7 @@ for (const mode of ['person', 'car', 'cyclist', 'helicopter']) {
       assert.equal(ent.chassisPivot.position.y, 0);
       assert.equal(ent.wheels[0].steerPivot.rotation.y, 0);
       assert.equal(ent.lastCollisionSpark, null);
-    } else if (mode === 'cyclist') {
+    } else if (mode === 'cyclist' || mode === 'cargobike') {
       assert.equal(ent.leanAngle, 0);
       assert.equal(ent.leanPivot.rotation.z, 0);
     } else {
@@ -264,7 +319,8 @@ for (const mode of ['person', 'car', 'cyclist', 'helicopter']) {
       assert.equal(ent.position.y, 120, 'keep the helicopter altitude when already above the minimum');
     }
     const before = [ent.position.x, ent.position.y, ent.position.z, ent.heading];
-    controller[`update${mode[0].toUpperCase()}${mode.slice(1)}`](0.1, 0);
+    if (mode === 'cargobike') controller.updateCyclist(0.1, ent, mode);
+    else controller[`update${mode[0].toUpperCase()}${mode.slice(1)}`](0.1, 0);
     assert.deepEqual([ent.position.x, ent.position.y, ent.position.z, ent.heading], before, 'the first neutral frame stays at the arrival');
   });
 }
@@ -274,7 +330,7 @@ test('teleport checks all overlapping buildings instead of leaving a sequential 
     { minX: 0, maxX: 10, minZ: 0, maxZ: 10, maxY: 200 },
     { minX: 9, maxX: 20, minZ: 0, maxZ: 10, maxY: 200 }
   ];
-  for (const mode of ['person', 'car', 'cyclist', 'helicopter']) {
+  for (const mode of ['person', 'car', 'cyclist', 'cargobike', 'helicopter']) {
     // Reverse order as well: a valid arrival must not rely on collider traversal order.
     for (const list of [colliders, colliders.slice().reverse()]) {
       const { controller, ent } = teleportHarness(mode, list.map(c => ({ ...c })));
@@ -292,7 +348,7 @@ test('teleport checks all overlapping buildings instead of leaving a sequential 
 test('teleports use oriented building footprints without rejecting clear corners of their bounds', () => {
   const cs = Math.SQRT1_2;
   const box = { minX: -8, maxX: 8, minZ: -8, maxZ: 8, maxY: 200, obb: { cx: 0, cz: 0, hx: 8, hz: 2, cs, sn: cs } };
-  for (const mode of ['person', 'car', 'cyclist', 'helicopter']) {
+  for (const mode of ['person', 'car', 'cyclist', 'cargobike', 'helicopter']) {
     const { controller, ent } = teleportHarness(mode, [{ ...box }]);
     assert.deepEqual({ ...controller.teleportActiveTo(7, 7, 0.6) }, { x: 7, z: 7 });
     const actual = controller.teleportActiveTo(0, 0, 0.6);
@@ -358,7 +414,7 @@ test('teleports preserve clear rounded corners and separated rotated cars', () =
 });
 
 test('movement and teleports pass underneath elevated building sections', () => {
-  for (const mode of ['person', 'car', 'cyclist', 'helicopter']) {
+  for (const mode of ['person', 'car', 'cyclist', 'cargobike', 'helicopter']) {
     const { controller, ent } = teleportHarness(mode, [{ minX: 0, maxX: 10, minZ: 0, maxZ: 10, minY: 4, maxY: 30 }]);
     controller.getGroundHeight = () => 0;
     const y = mode === 'helicopter' ? 0.25 : 0;
@@ -370,7 +426,7 @@ test('movement and teleports pass underneath elevated building sections', () => 
 });
 
 test('building clearance uses the full player height beneath an overhang', () => {
-  for (const [mode, height] of [['person', 1.9], ['car', 1.8], ['cyclist', 1.9], ['helicopter', 3.2]]) {
+  for (const [mode, height] of [['person', 1.9], ['car', 1.8], ['cyclist', 1.9], ['cargobike', 1.9], ['helicopter', 3.2]]) {
     const y = mode === 'helicopter' ? 0.25 : 0;
     const { controller, ent } = teleportHarness(mode, [{
       minX: 0, maxX: 10, minZ: 0, maxZ: 10, minY: y + height - 0.1, maxY: 30
@@ -384,7 +440,7 @@ test('building clearance uses the full player height beneath an overhang', () =>
 });
 
 test('players above a roof are clear once their body bottoms clear it', () => {
-  for (const mode of ['person', 'car', 'cyclist', 'helicopter']) {
+  for (const mode of ['person', 'car', 'cyclist', 'cargobike', 'helicopter']) {
     const { controller, ent } = teleportHarness(mode, [{ minX: 0, maxX: 10, minZ: 0, maxZ: 10, maxY: 10 }]);
     controller.getGroundHeight = () => 10.1;
     const y = mode === 'helicopter' ? 10.35 : 10.1;
@@ -441,14 +497,16 @@ test('successive mode teleports keep parked players out of the arrival and defau
   const { controller, ent: car } = teleportHarness('car');
   const person = teleportHarness('person').ent;
   const cyclist = teleportHarness('cyclist').ent;
-  controller.entities = { car, person, cyclist };
+  const cargobike = teleportHarness('cargobike').ent;
+  controller.entities = { car, person, cyclist, cargobike };
   person.position.x = 300;
   cyclist.position.x = 200;
+  cargobike.position.x = 350;
   const heading = Math.PI / 2; // The first radial candidate is +X: its rear camera would sit on the parked car.
   assert.deepEqual({ ...controller.teleportActiveTo(0, 0, heading) }, { x: 0, z: 0 });
   const arrivals = [car];
-  const radii = { car: 2.4, person: 0.48, cyclist: 1.0 };
-  for (const mode of ['person', 'cyclist']) {
+  const radii = { car: 2.4, person: 0.48, cyclist: 1.0, cargobike: 1.45 };
+  for (const mode of ['person', 'cyclist', 'cargobike']) {
     controller.activeMode = mode;
     const ent = controller.entities[mode];
     const actual = controller.teleportActiveTo(0, 0, heading);

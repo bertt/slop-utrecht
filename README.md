@@ -1,6 +1,6 @@
 # Slop Utrecht
 
-A simulation of the inner city of Utrecht built with [three.js](https://threejs.org/), WebGPURenderer, and TSL. Explore the Domtoren, Oudegracht and Centraal Station on foot, by car, by bicycle, or by helicopter.
+A simulation of the inner city of Utrecht built with [three.js](https://threejs.org/), WebGPURenderer, and TSL. Explore the Domtoren, Oudegracht and Centraal Station on foot, by car, by bicycle or cargo bike, or by helicopter.
 
 [Try it live](https://bertt.github.io/slop-utrecht/)
 

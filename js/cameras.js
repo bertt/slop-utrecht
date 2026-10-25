@@ -202,11 +202,12 @@ class CameraSystem {
           entity.position.z - Math.cos(totalYaw) * horizDist
         );
 
-        const lookUpBias = entity.type === 'helicopter' ? 0.2 : (entity.type === 'car' ? 0.52 : 1.55);
+        const lookUpBias = entity.type === 'helicopter' ? 0.2 : entity.type === 'car' ? 0.52 : entity.type === 'cargobike' ? 0.8 : 1.55;
+        const lookAhead = entity.type === 'cargobike' ? 0.35 : 5.2;
         desiredLook.set(
-          entity.position.x + Math.sin(entity.heading) * 5.2,
+          entity.position.x + Math.sin(entity.heading) * lookAhead,
           entity.position.y + entity.cameraTargetOffset.y + lookUpBias,
-          entity.position.z + Math.cos(entity.heading) * 5.2
+          entity.position.z + Math.cos(entity.heading) * lookAhead
         );
         break;
       }
@@ -237,6 +238,9 @@ class CameraSystem {
           eyeY = 1.52;
         } else if (entity.type === 'cyclist') {
           fwdOffset = 0.35;
+          eyeY = 1.55;
+        } else if (entity.type === 'cargobike') {
+          fwdOffset = -0.5;
           eyeY = 1.55;
         } else if (entity.type === 'helicopter') {
           fwdOffset = 1.65;
