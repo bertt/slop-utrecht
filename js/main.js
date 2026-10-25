@@ -8,6 +8,7 @@ import { buildCityGrid } from './city-grid.js';
 import { buildBoroughs } from './boroughs.js';
 import { buildLandmarks } from './landmarks.js';
 import { buildCityBlocks } from './buildings.js';
+import { loadBagBuildings } from './bag3d.js';
 import { buildStreetDetails } from './street-details.js';
 import { createTrafficSystem, createHighwayTraffic } from './traffic.js';
 import { buildRoadPaint } from './road-paint.js';
@@ -83,7 +84,17 @@ async function initApp() {
   markInit('boroughs');
   const { colliders: landmarkColliders } = buildLandmarks(scene);
   markInit('landmarks');
-  const cityBlocks = buildCityBlocks(scene);
+  // Real 3D BAG building volumes; the OSM-extruded buildings remain the fallback when the tiles can't be loaded.
+  let bagBuildings = null;
+  try {
+    bagBuildings = await loadBagBuildings(scene, {
+      onProgress: (done, total) => { if (loadingStatus) loadingStatus.textContent = `Loading 3D BAG buildings ${done}/${total}…`; }
+    });
+  } catch (error) {
+    console.warn('[bag3d] falling back to OSM buildings:', error);
+  }
+  markInit('bag3d');
+  const cityBlocks = buildCityBlocks(scene, { bag: !!bagBuildings });
   markInit('blocks');
   const allColliders = [...landmarkColliders, ...cityBlocks.colliders, ...boroughs.colliders, ...(cityGrid.colliders || [])];
 

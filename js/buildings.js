@@ -257,7 +257,8 @@ function carve(r, holes, axis = 'x') {
   return out.map(([u0, u1, v0, v1]) => (flip ? rect(v0, v1, u0, u1) : rect(u0, u1, v0, v1)));
 }
 
-function buildCityBlocks(scene) {
+// `bag`: 3D BAG meshes already supply the facades and roofs, so only colliders and street-level details are built here.
+function buildCityBlocks(scene, { bag = false } = {}) {
   const group = new THREE.Group();
   group.name = BERLIN_DATA ? 'BerlinMitteCityBlocks' : 'ManhattanCityBlocks';
   const colliders = [];
@@ -2048,7 +2049,7 @@ function buildCityBlocks(scene) {
           const road = !updated && ringIndex === 0 && length > 6 && base < 0.5 ? nearestBerlinRoad(x + nx * 3, z + nz * 3, 35) : null;
           const shop = !updated && road && road.distance < road.width / 2 + 13 && !['church', 'cathedral', 'school', 'university', 'civic'].includes(source.kind);
           const face = ringIndex ? WALL_KINDS.rear : shop ? WALL_KINDS.shop : WALL_KINDS.entry;
-          buckets[matIndex].push({ x, y: base + (eave - base) / 2 + 0.02, z, w: length + 0.06, h: eave - base, d: thickness,
+          if (!bag) buckets[matIndex].push({ x, y: base + (eave - base) / 2 + 0.02, z, w: length + 0.06, h: eave - base, d: thickness,
             ry, tone, facadeColour, facadeLevels: source.facadeLevels, faces: [WALL_KINDS.blankStone, WALL_KINDS.blankStone, face, face] });
           if (base < 1) {
             const hx = length / 2, hz = thickness / 2, cs = Math.cos(ry), sn = Math.sin(ry);
@@ -2056,7 +2057,7 @@ function buildCityBlocks(scene) {
             colliders.push({ minX: x - ex, maxX: x + ex, minZ: z - ez, maxZ: z + ez, maxY: height,
               obb: { cx: x, cz: z, hx, hz, cs, sn } });
           }
-          if (!modern && height > 7 && length > 1.5) {
+          if (!bag && !modern && height > 7 && length > 1.5) {
             detail.cornices.push({ x, z, y: eave, w: length + 0.2, h: 0.44, d: 0.85, ry });
             if (height > 13) detail.cornices.push({ x, z, y: 4.4, w: length + 0.12, h: 0.22, d: 0.62, ry });
           }
@@ -2071,8 +2072,8 @@ function buildCityBlocks(scene) {
           }
         }
       }
-      let roof = berlinPolygonGeometry(poly, holes, eave + 0.035);
-      if (pitched) {
+      let roof = bag ? null : berlinPolygonGeometry(poly, holes, eave + 0.035);
+      if (pitched && !bag) {
         // Hipped/gabled roof on a mapped quadrilateral, preserving every eave
         // corner; no guessed Manhattan towers or rooftop water tanks.
         const ordered = signedArea(poly) < 0 ? [...poly].reverse() : poly;
@@ -2091,8 +2092,8 @@ function buildCityBlocks(scene) {
         roof.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
         roof.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2)); roof.computeVertexNormals();
       }
-      roofBuckets[Math.floor(tone * 3)].push(roof);
-      if (!pitched && !holes.length && !source.part && height > 12 && rand() < 0.34) {
+      if (roof) roofBuckets[Math.floor(tone * 3)].push(roof);
+      if (!bag && !pitched && !holes.length && !source.part && height > 12 && rand() < 0.34) {
         detail.hvacUnits.push({ x: cx, z: cz, y: height, w: 2.2, h: 0.85, d: 3.0, ry: 0 });
       }
       quadtree.insert(detail); allBlocks.push(detail); built++;
