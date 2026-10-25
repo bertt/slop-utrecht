@@ -207,6 +207,20 @@ for (const b of buildings) {
   landmarks[b.name] = { x: r1((bb.x0 + bb.x1) / 2), z: r1((bb.z0 + bb.z1) / 2), w: r1(bb.x1 - bb.x0), d: r1(bb.z1 - bb.z0), h: b.name === 'Domtoren' ? 112 : b.h, area: Math.round(area), ring: b.ring };
 }
 
+// --- Municipal trees (tools/fetch-bomen.py) replace the sparser OSM trees; height estimated from planting year ---------
+const BOMEN = path.join(DIR, 'data', 'bomen_centrum.json');
+if (fs.existsSync(BOMEN)) {
+  const year = new Date().getFullYear();
+  const { trees: gem } = JSON.parse(fs.readFileSync(BOMEN, 'utf8'));
+  trees.length = 0;
+  for (const g of gem) {
+    const [x, z] = toWorld(g.lon, g.lat);
+    const h = g.planted ? Math.min(22, 4 + (year - g.planted) * 0.4) : 9;
+    trees.push({ x: r1(x), z: r1(z), h: r1(h) });
+  }
+  log(`using ${trees.length} municipal trees`);
+}
+
 const [s, w, n, eLon] = BBOX;
 const [minX, maxZ0] = toWorld(w, s);
 const [maxX, minZ] = toWorld(eLon, n);
@@ -218,7 +232,7 @@ const data = {
     frame: 'x = east, z = south, metres; origin at the Domtoren',
     coordinateSystem: 'x east, z south, metres',
     lonLatAffine: { lon0: LON0, lat0: LAT0, x: [0, r1(KX * 1e3) / 1e3, 0], z: [0, 0, -r1(KY * 1e3) / 1e3], maxErrorM: 0.5 },
-    sources: [{ name: 'OpenStreetMap contributors', license: 'ODbL 1.0', attribution: '© OpenStreetMap contributors' }],
+    sources: [{ name: 'OpenStreetMap contributors', license: 'ODbL 1.0', attribution: '© OpenStreetMap contributors' }, ...(fs.existsSync(BOMEN) ? [{ name: 'Gemeente Utrecht, bomenkaart 2026 (park- en straatbomen)', url: 'https://utrecht.blob.core.windows.net/catalog/bomenkaart_2026/park_en_straatbomen/park_en_straatbomen.parquet' }] : [])],
     areas: [],
     counts: { buildings: buildings.length, roads: roads.length, water: water.length, parks: parks.length, railways: railways.length, trees: trees.length, signals: signals.length }
   },
