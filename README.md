@@ -20,4 +20,4 @@ Fork it, remix it, improve it, break it. Make games, animations, films, experime
 
 The project code is available under the [MIT License](LICENSE).
 
-Geographic data: NYC Open Data and © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright) (ODbL). Third-party data and dependencies retain their respective licenses.
+Geographic data: NYC Open Data and © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright) (ODbL). The trees come from a GeoParquet file in the [Utrecht Portolan catalog](https://browser.portolan-sdi.org/#/external/utrecht.blob.core.windows.net/catalog/catalog.json) (Gemeente Utrecht, bomenkaart 2026). Third-party data and dependencies retain their respective licenses.
