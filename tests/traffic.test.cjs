@@ -4,7 +4,8 @@ const { join } = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const source = readFileSync(join(__dirname, '../js/traffic.js'), 'utf8');
+const source = ['traffic.js', 'pedestrian-system.js']
+  .map((file) => readFileSync(join(__dirname, '../js', file), 'utf8')).join('\n');
 // Exercise the production lane query and player snapshot without creating the WebGPU scene.
 const laneQuery = source.match(/  function playerInLane\(lane, pl\) \{[\s\S]*?\n  \}/)?.[0];
 const playerSnapshot = source.match(/    const pl = entity[\s\S]*?\n    \} : null;/)?.[0];
@@ -185,7 +186,7 @@ function populationContext() {
     hasView: true, camX: 0, camY: 10, camZ: 0, visible: () => true,
     focusX: 0, focusZ: 0, player: { active: false },
     clock: 0,
-    VEHICLE_SPAWN_DISTANCE: 250, PED_SPAWN_DISTANCE: 150, NEAR_RADIUS: 350,
+    VEHICLE_SPAWN_DISTANCE: 250, PED_SPAWN_DISTANCE: 150, NEAR_RADIUS: 350, PED_AVOID_INTERVAL: 0.12,
     nearEdges: [], nearSignals: [], track: {}, KERB: 1.6, QUEUE_GAP: 0.62,
     atCurb: () => {}, laneClear: () => true,
     place: (v, e, lane, s) => Object.assign(v, { edge: e, lane, s })
