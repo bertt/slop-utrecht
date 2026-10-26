@@ -94,7 +94,7 @@ class TouchControls {
   }
 
   setMode(mode) {
-    if (!['person', 'car', 'cyclist', 'helicopter'].includes(mode)) return;
+    if (!['person', 'car', 'cyclist', 'cargobike', 'helicopter'].includes(mode)) return;
     this.reset();
     if (!this.root) return;
     this.mode = mode;
