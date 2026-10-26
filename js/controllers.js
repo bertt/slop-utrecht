@@ -46,15 +46,20 @@ function spawnPosition(lateral, forward, y) {
 const groundCollider = { type: 'ground' };
 
 const CAR_DRIVE = {
-  speed: 23.5, boostSpeed: 36, reverseSpeed: 10.5, acceleration: 14, boostAcceleration: 21,
-  rolling: 0.18, drag: 0.0012, coast: 0.6, brake: 9
+  speed: 36, reverseSpeed: 10.5, acceleration: 4.5,
+  powerSpeed: 14.5, // Above 52 km/h, engine power limits acceleration.
+  rolling: 0.18, drag: 0.0012, coast: 0.6, brake: 9,
+  wheelbase: 2.76, grip: 9.5, cornering: 10.5 // Wheelbase (m), tire and steering acceleration limits (m/s²).
 };
 const BICYCLE_DRIVE = {
-  speed: 12.8, boostSpeed: 19, reverseSpeed: 4.5, acceleration: 9, boostAcceleration: 13.5,
+  speed: 19, reverseSpeed: 4.5, acceleration: 9,
   rolling: 0.08, drag: 0.004, coast: 0.2, brake: 7.5 // Backward input is scaled to 0.6, giving 4.5 m/s² braking.
 };
 
-function driveSpeed(speed, throttle, boost, dt, drive) {
+function driveSpeed(speed, throttle, dt, drive) {
+  // Turning can project tiny sideways motion back into speed after braking to zero.
+  // Treat a crawl as stopped when changing direction, so this cannot hold the brakes forever.
+  if (speed * throttle < 0 && Math.abs(speed) < 0.05) speed = 0;
   const braking = speed * throttle < 0;
   const magnitude = Math.abs(speed);
   // Extra resistance on release gives a stronger slowdown while coasting.
@@ -63,9 +68,10 @@ function driveSpeed(speed, throttle, boost, dt, drive) {
   const coasting = Math.max(0, magnitude - deceleration * dt) / (1 + drive.drag * magnitude * dt);
   if (!throttle || braking) return Math.sign(speed) * coasting;
 
-  const limit = throttle < 0 ? drive.reverseSpeed : boost ? drive.boostSpeed : drive.speed;
-  const acceleration = boost ? drive.boostAcceleration : drive.acceleration;
-  // Releasing boost removes the extra power; existing momentum decays naturally instead of being clamped.
+  const limit = throttle < 0 ? drive.reverseSpeed : drive.speed;
+  let acceleration = drive.acceleration;
+  if (drive.powerSpeed) acceleration *= drive.powerSpeed / Math.max(drive.powerSpeed, magnitude);
+  // Collision momentum above the powered limit decays naturally instead of being clamped.
   return Math.sign(throttle) * Math.min(Math.max(limit, coasting), coasting + Math.abs(throttle) * acceleration * dt);
 }
 
@@ -405,8 +411,7 @@ class ThirdPersonControllerManager {
       left: false,
       right: false,
       up: false,
-      down: false,
-      boost: false
+      down: false
     };
 
     this.entities = {
@@ -458,8 +463,7 @@ class ThirdPersonControllerManager {
       left: ['KeyA', 'ArrowLeft'],
       right: ['KeyD', 'ArrowRight'],
       up: ['Space', 'KeyE'],
-      down: ['KeyQ', 'KeyC'],
-      boost: ['ShiftLeft', 'ShiftRight']
+      down: ['KeyQ', 'KeyC']
     };
     const actionsByCode = new Map(Object.entries(bindings).flatMap(([action, codes]) => codes.map((code) => [code, action])));
     this._pressedCodes = new Set();
@@ -530,6 +534,8 @@ class ThirdPersonControllerManager {
   setMode(mode) {
     if (!this.entities[mode]) return;
     this.activeMode = mode;
+    const car = this.entities.car;
+    if (mode !== 'car' && car?.carState) car.carState.value.x = car.carState.value.w = 0;
   }
 
   getActiveEntity() {
@@ -557,13 +563,15 @@ class ThirdPersonControllerManager {
       ent.crowd.add(ent.rig, 0);
       ent.crowd.end();
     } else if (this.activeMode === 'car') {
+      ent.prevX = ent.position.x;
+      ent.prevZ = ent.position.z;
       ent.vx = ent.vz = ent.angularVel = ent.steerAngle = 0;
       ent.pitchVel = ent.rollVel = ent.heaveY = ent.heaveVel = 0;
       ent.chassisPivot.rotation.x = ent.chassisPivot.rotation.z = 0;
       ent.chassisPivot.position.y = 0;
       ent.lastCollisionSpark = null;
       for (const wheel of ent.wheels) if (wheel.isFront) wheel.steerPivot.rotation.y = 0;
-      if (ent.carState) ent.carState.value.x = 1;
+      if (ent.carState) ent.carState.value.x = ent.carState.value.w = 0;
     } else if (this.activeMode === 'cyclist' || this.activeMode === 'cargobike') {
       ent.leanAngle = ent.leanPivot.rotation.z = 0;
       if (ent.frontSteerPivot) ent.frontSteerPivot.rotation.y = 0;
@@ -727,7 +735,7 @@ class ThirdPersonControllerManager {
     frontPlate.position.set(0, spec.plates[0], spec.zFront + 0.006);
     chassisPivot.add(frontPlate);
 
-    // 3b. Brake lights, CHMSL & turn signals are lit by the taxi material from its carState uniform (see updateCar)
+    // 3b. Brake, reverse & turn lights are lit by the taxi material from its carState uniform (see updateCar)
     const carState = taxiLoftMat.userData.carState;
 
     // 4. Steerable & Spinning 3D LatheGeometry Tyres + Recessed 5-Spoke Alloy Wheels
@@ -1856,17 +1864,19 @@ class ThirdPersonControllerManager {
 
   updatePerson(dt) {
     const p = this.entities.person;
-    const maxWalk = this.keys.boost ? 8.2 : 4.4;
+    const maxSpeed = 8.2;
     const turnRate = 2.6;
 
     let targetSpeed = 0;
-    if (this.keys.forward) targetSpeed = maxWalk * this.keys.forward;
-    else if (this.keys.backward) targetSpeed = -maxWalk * 0.65 * this.keys.backward;
+    if (this.keys.forward) targetSpeed = maxSpeed * this.keys.forward;
+    else if (this.keys.backward) targetSpeed = -maxSpeed * 0.65 * this.keys.backward;
 
     if (this.keys.left) p.heading += turnRate * dt * this.keys.left;
     if (this.keys.right) p.heading -= turnRate * dt * this.keys.right;
 
-    p.speed += (targetSpeed - p.speed) * Math.min(1, dt * 10);
+    const accelerating = Math.abs(targetSpeed) > Math.abs(p.speed) && p.speed * targetSpeed >= 0;
+    const acceleration = accelerating ? 5.5 * Math.abs(targetSpeed) / maxSpeed : 12;
+    p.speed += Math.max(-acceleration * dt, Math.min(acceleration * dt, targetSpeed - p.speed));
 
     p.position.x += Math.sin(p.heading) * p.speed * dt;
     p.position.z += Math.cos(p.heading) * p.speed * dt;
@@ -1885,61 +1895,80 @@ class ThirdPersonControllerManager {
   }
 
   updateCar(dt) {
+    if (dt <= 0) return;
     const c = this.entities.car;
-    const maxSpeed = this.keys.boost ? CAR_DRIVE.boostSpeed : CAR_DRIVE.speed;
 
     let throttle = 0;
     if (this.keys.forward) throttle = this.keys.forward;
     else if (this.keys.backward) throttle = -this.keys.backward;
 
     const braking = c.speed * throttle < 0;
-    const previousSpeed = c.speed;
-    c.speed = driveSpeed(c.speed, throttle, this.keys.boost, dt, CAR_DRIVE);
-    const acceleration = dt > 0 ? (c.speed - previousSpeed) / dt : 0;
 
     let steerInput = 0;
     if (this.keys.left) steerInput = this.keys.left;
     if (this.keys.right) steerInput = -this.keys.right;
 
-    c.steerAngle += (steerInput * 0.52 - c.steerAngle) * Math.min(1, dt * 10);
-
-    if (Math.abs(c.speed) > 0.2) {
-      const dirSign = c.speed >= 0 ? 1 : -1;
-      const speedFactor = Math.min(1.0, Math.abs(c.speed) / 8.0);
-      c.heading += c.steerAngle * 2.4 * speedFactor * dirSign * dt;
-    }
-
-    // Integrate collision yaw spin & lateral tire slip velocity with asphalt grip damping
-    const tireGripDamp = Math.exp(-dt * 6.8);
-    c.heading += c.angularVel * dt;
-    c.angularVel *= Math.exp(-dt * 7.8);
-
     const prevX = c.position.x;
     const prevZ = c.position.z;
-    c.position.x += (Math.sin(c.heading) * c.speed + c.vx) * dt;
-    c.position.z += (Math.cos(c.heading) * c.speed + c.vz) * dt;
-    c.vx *= tireGripDamp;
-    c.vz *= tireGripDamp;
+    c.prevX = prevX;
+    c.prevZ = prevZ;
+    // Short steps keep grip, impacts and suspension consistent at different display rates.
+    const steps = Math.ceil(dt * 120);
+    const step = dt / steps;
+    const steerResponse = 1 - Math.exp(-10 * step);
+    const yawResponse = 1 - Math.exp(-5 * step);
+    const tireResponse = 1 - Math.exp(-4 * step);
+    for (let i = 0; i < steps; i++) {
+      const sin = Math.sin(c.heading), cos = Math.cos(c.heading);
+      const vx = sin * c.speed + c.vx, vz = cos * c.speed + c.vz;
+      const forward = vx * sin + vz * cos;
+      const sideways = vx * cos - vz * sin;
+      const speed = driveSpeed(forward, throttle, step, CAR_DRIVE);
+      const acceleration = (speed - forward) / step;
+      // Braking and cornering share tire grip; air resistance does not use it.
+      const tireAcceleration = acceleration + CAR_DRIVE.drag * forward * Math.abs(forward);
+      const grip = Math.sqrt(Math.max(0, CAR_DRIVE.grip ** 2 - tireAcceleration ** 2));
 
-    this.resolveHorizontalCollision(c.position, 1.35, c);
+      // Full lock at parking speeds, progressively less steering at road speeds.
+      const turn = CAR_DRIVE.wheelbase * CAR_DRIVE.cornering;
+      const maxSteer = Math.atan(turn / Math.max(speed * speed, turn / Math.tan(0.60)));
+      c.steerAngle += (steerInput * maxSteer - c.steerAngle) * steerResponse;
+      const yawLimit = grip / Math.max(2, Math.abs(speed));
+      const targetYaw = Math.max(-yawLimit, Math.min(yawLimit, speed * Math.tan(c.steerAngle) / CAR_DRIVE.wheelbase));
+      // Collision spin remains part of the yaw velocity; the tires gradually regain control.
+      const yawStep = grip * 0.65 * step;
+      c.angularVel += Math.max(-yawStep, Math.min(yawStep, (targetYaw - c.angularVel) * yawResponse));
+      c.heading += c.angularVel * step;
+
+      // Turning the chassis must not instantly rotate its momentum. Tires remove sideways slip
+      // with a bounded force; longitudinal momentum, including impacts, stays in speed.
+      const nextSin = Math.sin(c.heading), nextCos = Math.cos(c.heading);
+      const worldX = sin * speed + cos * sideways;
+      const worldZ = cos * speed - sin * sideways;
+      c.speed = worldX * nextSin + worldZ * nextCos;
+      const slip = worldX * nextCos - worldZ * nextSin;
+      const correction = Math.max(-grip * step, Math.min(grip * step, -slip * tireResponse));
+      c.vx = nextCos * (slip + correction);
+      c.vz = -nextSin * (slip + correction);
+      c.position.x += (nextSin * c.speed + c.vx) * step;
+      c.position.z += (nextCos * c.speed + c.vz) * step;
+      this.resolveHorizontalCollision(c.position, 1.35, c);
+
+      const targetPitch = -Math.max(-1, Math.min(1, acceleration / CAR_DRIVE.acceleration)) * 0.026;
+      const targetRoll = Math.max(-0.09, Math.min(0.09, correction / step * 0.012));
+      c.pitchVel += ((targetPitch - c.chassisPivot.rotation.x) * 68 - c.pitchVel * 11.2) * step;
+      c.rollVel += ((targetRoll - c.chassisPivot.rotation.z) * 68 - c.rollVel * 11.2) * step;
+      c.chassisPivot.rotation.x = Math.max(-0.22, Math.min(0.22, c.chassisPivot.rotation.x + c.pitchVel * step));
+      c.chassisPivot.rotation.z = Math.max(-0.26, Math.min(0.26, c.chassisPivot.rotation.z + c.rollVel * step));
+      c.heaveVel += (-c.heaveY * 85 - c.heaveVel * 12) * step;
+      c.heaveY = Math.max(-0.08, Math.min(0.14, c.heaveY + c.heaveVel * step));
+    }
     c.position.y = this.getGroundHeight(c.position.x, c.position.z, 'car');
-
-    // 3-DOF Spring-Damper Chassis Suspension (Pitch, Roll & Vertical Heave)
-    const targetPitch = -Math.max(-1, Math.min(1, acceleration / CAR_DRIVE.acceleration)) * 0.026;
-    const targetRoll = -c.steerAngle * (c.speed / maxSpeed) * 0.092;
-    const springK = 68.0;
-    const dampC = 11.2;
-    c.pitchVel += ((targetPitch - c.chassisPivot.rotation.x) * springK - c.pitchVel * dampC) * dt;
-    c.rollVel += ((targetRoll - c.chassisPivot.rotation.z) * springK - c.rollVel * dampC) * dt;
-    c.chassisPivot.rotation.x = Math.max(-0.22, Math.min(0.22, c.chassisPivot.rotation.x + c.pitchVel * dt));
-    c.chassisPivot.rotation.z = Math.max(-0.26, Math.min(0.26, c.chassisPivot.rotation.z + c.rollVel * dt));
-
-    c.heaveVel += (-c.heaveY * 85.0 - c.heaveVel * 12.0) * dt;
-    c.heaveY = Math.max(-0.08, Math.min(0.14, c.heaveY + c.heaveVel * dt));
     c.chassisPivot.position.y = c.heaveY;
 
     if (c.carState) {
-      c.carState.value.x = braking || (c.speed === 0 && !throttle) ? 1 : 0;
+      c.carState.value.x = braking ? 1 : 0;
+      c.carState.value.w = c.speed < -0.2 ? 1 : 0;
     }
 
     const forwardDist = (c.position.x - prevX) * Math.sin(c.heading) + (c.position.z - prevZ) * Math.cos(c.heading);
@@ -1963,7 +1992,7 @@ class ThirdPersonControllerManager {
     if (this.keys.forward) throttle = this.keys.forward;
     else if (this.keys.backward) throttle = -0.6 * this.keys.backward;
 
-    b.speed = driveSpeed(b.speed, throttle, this.keys.boost, dt, BICYCLE_DRIVE);
+    b.speed = driveSpeed(b.speed, throttle, dt, BICYCLE_DRIVE);
 
     let turnInput = 0;
     if (this.keys.left) turnInput = this.keys.left;
@@ -2016,7 +2045,7 @@ class ThirdPersonControllerManager {
 
   updateHelicopter(dt, elapsed) {
     const h = this.entities.helicopter;
-    const maxHorizSpeed = this.keys.boost ? 52.0 : 32.0;
+    const maxHorizSpeed = 52.0;
     const maxVertSpeed = 16.0;
 
     let fwdInput = 0;

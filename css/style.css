@@ -955,7 +955,7 @@ body[data-mode='helicopter'] .gauge-alt {
   overflow: hidden;
 }
 
-/* Speed as a share of the mode's top speed; it turns taxi yellow on boost */
+/* Speed as a share of the mode's top speed */
 #hud-speed-meter {
   position: absolute;
   inset: 0;
@@ -963,11 +963,7 @@ body[data-mode='helicopter'] .gauge-alt {
   background: var(--text);
   transform-origin: left center;
   transform: scaleX(0);
-  transition: transform 0.25s linear, background-color 0.2s ease;
-}
-
-body.is-boosting #hud-speed-meter {
-  background: var(--taxi);
+  transition: transform 0.25s linear;
 }
 
 .camera-switch {
@@ -1393,8 +1389,7 @@ body.is-boosting #hud-speed-meter {
 }
 
 .touch-actions {
-  display: grid;
-  grid-template-columns: repeat(2, 64px);
+  display: flex;
   gap: 10px;
   padding-bottom: 22px;
 }
@@ -1416,7 +1411,6 @@ body.is-boosting #hud-speed-meter {
   touch-action: none;
 }
 .touch-action > [aria-hidden] { font-size: 23px; line-height: 1; }
-.touch-boost { grid-column: 2; border-color: rgba(255, 194, 26, 0.65); color: var(--taxi); }
 .touch-action.is-pressed { color: var(--taxi-ink); background: var(--taxi); border-color: var(--taxi); }
 
 body.touch-enabled .controls-hint,

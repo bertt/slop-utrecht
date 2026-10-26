@@ -9,13 +9,13 @@ const CAMERA_PRESETS = [
   { id: 'chase',       name: '3rd-Person Chase',         short: 'Chase',       category: 'follow', fov: 56 },
   { id: 'action',      name: 'Low-Angle Action',         short: 'Action',      category: 'follow', fov: 60 },
   { id: 'pov',         name: 'First-Person / Cockpit',   short: 'POV / Dash',  category: 'follow', fov: 68 },
-  { id: 'centralPark', name: 'Ogród Saski', short: 'Saski',  category: 'scenic', fov: 52 },
-  { id: 'fifthAve',    name: 'Marszałkowska & PKiN', short: 'Marszałkowska',     category: 'scenic', fov: 48 },
-  { id: 'timesSquare', name: 'Rondo Dmowskiego', short: 'Dmowskiego',    category: 'scenic', fov: 58 },
-  { id: 'chryslerGCT', name: 'Zamek & Skarpa', short: 'Skarpa',    category: 'scenic', fov: 50 },
-  { id: 'observatory', name: 'PKiN Panorama', short: 'Panorama',   category: 'scenic', fov: 52 },
-  { id: 'bryantPark',  name: 'Krakowskie Przedmieście', short: 'Krakowskie',   category: 'scenic', fov: 52 },
-  { id: 'waterfront',  name: 'Wisła & Skyline', short: 'Skyline',     category: 'scenic', fov: 46 },
+  { id: 'centralPark', name: 'Wilhelminapark', short: 'Wilhelmina',  category: 'scenic', fov: 52 },
+  { id: 'fifthAve',    name: 'Oudegracht & Domtoren', short: 'Oudegracht',     category: 'scenic', fov: 48 },
+  { id: 'timesSquare', name: 'Neude', short: 'Neude',    category: 'scenic', fov: 58 },
+  { id: 'chryslerGCT', name: 'Utrecht Centraal & Hoog Catharijne', short: 'Centraal',    category: 'scenic', fov: 50 },
+  { id: 'observatory', name: 'Domtoren Uitzicht', short: 'Domtoren',   category: 'scenic', fov: 52 },
+  { id: 'bryantPark',  name: 'Domplein & Dom', short: 'Domplein',   category: 'scenic', fov: 52 },
+  { id: 'waterfront',  name: 'Rijn & Skyline', short: 'Skyline',     category: 'scenic', fov: 46 },
   { id: 'fixed',       name: 'Test camera',              short: 'Test',        category: 'scenic', fov: 55 },
   { id: 'drone',       name: 'Auto-Director Aerial',     short: 'Director',    category: 'scenic', fov: 50 }
 ];
@@ -262,50 +262,50 @@ class CameraSystem {
 
       case 'centralPark': {
         const sway = Math.sin(elapsed * 0.22) * 1.5;
-        desiredPos.set(-80 + sway, 40, -1250);
-        desiredLook.set(-200, 10, -1050);
+        desiredPos.set(712 + sway, 25, 492);
+        desiredLook.set(808, 8, 381);
         break;
       }
 
       case 'fifthAve': {
         const sway = Math.sin(elapsed * 0.22) * 1.5;
-        desiredPos.set(128 + sway, 8, -420);
-        desiredLook.set(10, 60, 0);
+        desiredPos.set(-191 + sway, 12, -131);
+        desiredLook.set(0, 60, 0);
         break;
       }
 
       case 'timesSquare': {
         const sway = Math.sin(elapsed * 0.22) * 1.5;
-        desiredPos.set(560 + sway, 45, 260);
-        desiredLook.set(450, 10, 133);
+        desiredPos.set(-287 + sway, 20, -421);
+        desiredLook.set(-348, 8, -521);
         break;
       }
 
       case 'chryslerGCT': {
         const sway = Math.sin(elapsed * 0.22) * 1.5;
-        desiredPos.set(950 + sway, 18, -1690);
-        desiredLook.set(567, 25, -1817);
+        desiredPos.set(-588 + sway, 18, 247);
+        desiredLook.set(-745, 20, 136);
         break;
       }
 
       case 'observatory': {
         const sway = Math.sin(elapsed * 0.22) * 1.5;
-        desiredPos.set(0 + sway, 120, 60);
-        desiredLook.set(600, 10, -1300);
+        desiredPos.set(0 + sway, 100, 0);
+        desiredLook.set(-745, 10, 136);
         break;
       }
 
       case 'bryantPark': {
         const sway = Math.sin(elapsed * 0.22) * 1.5;
-        desiredPos.set(585 + sway, 2, -1050);
-        desiredLook.set(575, 10, -1300);
+        desiredPos.set(110 + sway, 4, -65);
+        desiredLook.set(0, 40, 0);
         break;
       }
 
       case 'waterfront': {
         const sway = Math.sin(elapsed * 0.22) * 1.5;
-        desiredPos.set(1900 + sway, 45, -1100);
-        desiredLook.set(300, 60, -300);
+        desiredPos.set(-882 + sway, 45, 626);
+        desiredLook.set(0, 60, 0);
         break;
       }
 

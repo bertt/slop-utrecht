@@ -4,7 +4,8 @@ const { join } = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const source = readFileSync(join(__dirname, '../js/traffic.js'), 'utf8');
+const source = ['traffic.js', 'pedestrian-system.js']
+  .map((file) => readFileSync(join(__dirname, '../js', file), 'utf8')).join('\n');
 function productionFunction(name, context) {
   const match = source.match(new RegExp(`  function ${name}\\([^]*?\\n  \\}`));
   assert.ok(match, `${name} is present`);
@@ -14,9 +15,10 @@ function productionFunction(name, context) {
 for (const [hasView, inView, draw] of [[true, false, false], [true, true, true], [false, false, true]]) {
   test(`pedestrian gait always advances; pose generation follows drawing (${hasView}, ${inView})`, () => {
     let args, drawn = 0;
-    const ped = { x: 10, z: 20, ux: 0, uz: 1, dir: 1, rig: { update(...values) { args = values; } } };
+    const ped = { x: 10, z: 20, ux: 0, uz: 1, dir: 1, dodge: 0, dodgeTarget: 0, diveStart: -Infinity,
+      rig: { update(...values) { args = values; } } };
     const renderPed = productionFunction('renderPed', {
-      hasView, visible: () => inView, pedGround: () => 0, focusX: 0, focusZ: 0,
+      hasView, visible: () => inView, pedGround: () => 0, focusX: 0, focusZ: 0, clock: 0, PEDESTRIAN_DIVE_DURATION: 2.5,
       pedCrowd: { add(rig) { assert.equal(rig, ped.rig); drawn++; } }
     });
     renderPed(ped, 1 / 60);
@@ -25,9 +27,31 @@ for (const [hasView, inView, draw] of [[true, false, false], [true, true, true],
     assert.equal(args[2], ped.z);
     assert.equal(args[5], ped);
     assert.equal(args[7], draw);
+    assert.equal(args[8], -1);
     assert.equal(drawn, draw ? 1 : 0);
   });
 }
+
+test('hidden pedestrians finish their dive without drawing or changing the escape heading', () => {
+  let args;
+  const ped = { x: 10, z: 20, ux: 0, uz: 1, dir: 1, dodge: 1.8, dodgeTarget: 1.8,
+    diveStart: 9.5, diveHeading: Math.PI / 2, rig: { update(...values) { args = values; } } };
+  const context = {
+    hasView: true, visible: () => false, pedGround: () => 0, focusX: 0, focusZ: 0,
+    clock: 10, PEDESTRIAN_DIVE_DURATION: 2.5,
+    pedCrowd: { add() { assert.fail('hidden pedestrians must not be drawn'); } }
+  };
+  const renderPed = productionFunction('renderPed', context);
+  renderPed(ped, 1 / 60);
+  assert.equal(args[3], ped.diveHeading);
+  assert.equal(args[7], false);
+  assert.equal(args[8], 0.5);
+  context.clock = 12;
+  renderPed(ped, 1 / 60);
+  assert.equal(args[3], 0);
+  assert.equal(args[7], false);
+  assert.equal(args[8], -1);
+});
 
 function sparkHarness(updates = 3) {
   const sparks = Array.from({ length: 120 }, () => ({ life: 0 }));

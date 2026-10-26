@@ -27,6 +27,7 @@
   <link rel="modulepreload" href="./js/trees.js" />
   <link rel="modulepreload" href="./js/actor-models.js" />
   <link rel="modulepreload" href="./js/vehicle-lights.js" />
+  <link rel="modulepreload" href="./js/vehicle-physics.js" />
   <link rel="modulepreload" href="./js/pedestrians.js" />
   <link rel="modulepreload" href="./js/lighting.js" />
   <link rel="modulepreload" href="./js/city-grid.js" />
@@ -38,6 +39,7 @@
   <link rel="modulepreload" href="./js/road-network.js" />
   <link rel="modulepreload" href="./js/road-paint.js" />
   <link rel="modulepreload" href="./js/traffic.js" />
+  <link rel="modulepreload" href="./js/pedestrian-system.js" />
   <link rel="modulepreload" href="./js/pedestrian-routes.js" />
   <link rel="modulepreload" href="./js/controllers.js" />
   <link rel="modulepreload" href="./js/touch-controls.js" />
@@ -206,7 +208,7 @@
           <span id="hud-active-mode" class="gauge-label">Utrecht Taxi</span>
           <span class="gauge-alt"><span class="gauge-alt-label">Alt</span> <span id="hud-altitude">0</span> ft</span>
         </div>
-        <div class="gauge-speed"><span id="hud-speed">0</span><span class="gauge-unit">mph</span></div>
+        <div class="gauge-speed"><span id="hud-speed">0</span><span class="gauge-unit">km/u</span></div>
         <div class="gauge-meter" aria-hidden="true"><span id="hud-speed-meter"></span></div>
       </div>
       <div id="camera-switch" class="camera-switch">
@@ -240,9 +242,6 @@
       <button class="touch-action" data-touch-action="down" type="button" aria-label="Descend" aria-pressed="false" hidden>
         <span aria-hidden="true">↓</span><span data-touch-label="down">Descend</span>
       </button>
-      <button class="touch-action touch-boost" data-touch-action="boost" type="button" aria-label="Boost" aria-pressed="false">
-        <span aria-hidden="true">↟</span><span data-touch-label="boost">Boost</span>
-      </button>
     </div>
   </section>
 
@@ -253,13 +252,13 @@
     <button id="cam-action" class="pop-item cam-btn" data-camera="action" type="button"><span class="pop-name">Low-Angle Action</span><kbd>6</kbd></button>
     <button id="cam-pov" class="pop-item cam-btn" data-camera="pov" type="button"><span class="pop-name">First-Person / Cockpit</span><kbd>7</kbd></button>
     <div class="pop-title">Scenic</div>
-    <button id="cam-centralPark" class="pop-item cam-btn" data-camera="centralPark" type="button"><span class="pop-name">Central Park Oasis</span></button>
-    <button id="cam-fifthAve" class="pop-item cam-btn" data-camera="fifthAve" type="button"><span class="pop-name">5th Ave &amp; Empire State</span><kbd>8</kbd></button>
-    <button id="cam-timesSquare" class="pop-item cam-btn" data-camera="timesSquare" type="button"><span class="pop-name">Times Square Crossroads</span><kbd>9</kbd></button>
-    <button id="cam-chryslerGCT" class="pop-item cam-btn" data-camera="chryslerGCT" type="button"><span class="pop-name">42nd St · Chrysler &amp; GCT</span><kbd>0</kbd></button>
-    <button id="cam-observatory" class="pop-item cam-btn" data-camera="observatory" type="button"><span class="pop-name">Empire State 86th Deck</span></button>
-    <button id="cam-bryantPark" class="pop-item cam-btn" data-camera="bryantPark" type="button"><span class="pop-name">Bryant Park &amp; NYPL</span></button>
-    <button id="cam-waterfront" class="pop-item cam-btn" data-camera="waterfront" type="button"><span class="pop-name">East River &amp; Skyline</span></button>
+    <button id="cam-centralPark" class="pop-item cam-btn" data-camera="centralPark" type="button"><span class="pop-name">Wilhelminapark</span></button>
+    <button id="cam-fifthAve" class="pop-item cam-btn" data-camera="fifthAve" type="button"><span class="pop-name">Oudegracht &amp; Domtoren</span><kbd>8</kbd></button>
+    <button id="cam-timesSquare" class="pop-item cam-btn" data-camera="timesSquare" type="button"><span class="pop-name">Neude</span><kbd>9</kbd></button>
+    <button id="cam-chryslerGCT" class="pop-item cam-btn" data-camera="chryslerGCT" type="button"><span class="pop-name">Utrecht Centraal &amp; Hoog Catharijne</span><kbd>0</kbd></button>
+    <button id="cam-observatory" class="pop-item cam-btn" data-camera="observatory" type="button"><span class="pop-name">Domtoren Uitzicht</span></button>
+    <button id="cam-bryantPark" class="pop-item cam-btn" data-camera="bryantPark" type="button"><span class="pop-name">Domplein &amp; Dom</span></button>
+    <button id="cam-waterfront" class="pop-item cam-btn" data-camera="waterfront" type="button"><span class="pop-name">Rijn &amp; Skyline</span></button>
     <button id="cam-drone" class="pop-item cam-btn" data-camera="drone" type="button"><span class="pop-name">Auto-Director Aerial</span></button>
   </div>
 
