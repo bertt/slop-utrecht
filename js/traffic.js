@@ -1769,7 +1769,6 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     collideTraffic();
     for (const v of vehicles) {
       if (!v.edge) continue;
-      if (v.vx * v.vx + v.vz * v.vz > 0.36) knockOn(v);
       if (v.bus) renderBus(v);
       else if (v.bike) renderBike(v);
       else renderCar(v);
