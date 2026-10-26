@@ -796,7 +796,11 @@ function buildTreeGeometries(speciesIndex, variant, tileMeters) {
         addTube(gb, b, b.level === 0 ? 5 : 3, b.level === 0 ? 4 : 6, aoAt, swayWeight);
       }
     }
-    const cards = lod === 0 ? cards0 : placeCards(sp, branches, lod, tileMeters, rng, crown);
+    // Close trees add the coarse branch cards and the whole-crown shell on top of the twig cards, so a crown seen
+    // from above (helicopter) stays as full as the distant levels
+    const cards = lod === 0
+      ? [...cards0, ...placeCards(sp, branches, 1, tileMeters, rng, crown), ...placeCards(sp, branches, 2, tileMeters, rng, crown)]
+      : placeCards(sp, branches, lod, tileMeters, rng, crown);
     for (const c of cards) addCard(gb, c.at, c.up, c.face, c.size, c.tile, rng() < 0.5, rng(), crown);
     const g = gb.build();
     g.userData = { species: sp.name, variant, lod, cards: cards.length, triangles: gb.idx.length / 3 };
