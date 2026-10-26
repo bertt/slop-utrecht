@@ -514,7 +514,7 @@ function buildStreetDetails(scene) {
       setMatrix(armMatrices, s.x + s.nx * 1.1, 8.08, s.z + s.nz * 1.1, 2.2, 0.085, 0.085, yaw);
       setMatrix(lampHeadMatrices, s.x + s.nx * 2.1, 8.1, s.z + s.nz * 2.1, 1, 1, 1, yaw);
       cobraLampSites.push({ x: s.x + s.nx * 2.1, y: 8.04, z: s.z + s.nz * 2.1, tx: s.x + s.nx * 3.5, tz: s.z + s.nz * 3.5 });
-      placedPoles.push({ x: s.x, z: s.z });
+      addPole(s.x, s.z, 0.11);
       if (s.name && i % 4 === 0 && (berlinSignMatrices.has(s.name) || berlinSignMatrices.size < 70 || expansionStreetSigns.has(s.name))) {
         if (!berlinSignMatrices.has(s.name)) berlinSignMatrices.set(s.name, []);
         setMatrix(berlinSignMatrices.get(s.name), s.x, 3.25, s.z, 1.8, 0.33, 0.055, -Math.atan2(s.uz, s.ux));
