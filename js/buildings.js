@@ -39,6 +39,7 @@ import {
   createCurtainWallMaterial,
   createFacadeBoxes,
   createBillboardMaterial,
+  filteredPulse,
   WALL_KINDS
 } from './tsl-materials.js';
 import { GEO } from './nyc-geodata.js';
@@ -2327,10 +2328,12 @@ function buildCityBlocks(scene, { bag = false } = {}) {
   const woodMat = new THREE.MeshStandardNodeMaterial({ roughness: 0.78 });
   woodMat.colorNode = Fn(() => {
     const u = uv();
-    const staveSeam = smoothstep(0.08, 0.0, abs(fract(u.x.mul(28.0)).sub(0.5)));
+    // Preserve the average width of seams and hoops when they become smaller than a pixel.
+    const staveCoord = u.x.mul(28.0);
+    const staveSeam = filteredPulse(fract(staveCoord), 0.46, 0.54, fwidth(staveCoord));
     const staveTone = mix(color(0x8e6343), color(0x5c3e26), staveSeam.mul(0.55));
-    const bandY = fract(u.y.mul(5.0));
-    const isHoop = smoothstep(0.11, 0.05, abs(bandY.sub(0.5)));
+    const bandCoord = u.y.mul(5.0);
+    const isHoop = filteredPulse(fract(bandCoord), 0.42, 0.58, fwidth(bandCoord));
     return mix(staveTone, color(0x1f2328), isHoop);
   })();
   const roofCapMat = new THREE.MeshStandardNodeMaterial({ color: 0x3b4045, roughness: 0.65, metalness: 0.3 });
@@ -2391,11 +2394,14 @@ function buildCityBlocks(scene, { bag = false } = {}) {
     const fan2 = length(u.sub(vec2(0.7, 0.5)));
     const fanDist = min(fan1, fan2);
     const inFanWell = smoothstep(0.19, 0.17, fanDist);
-    const fanRing = smoothstep(0.025, 0.008, abs(fract(fanDist.mul(16.0)).sub(0.5))).mul(inFanWell);
+    // Average subpixel slats and fan rings instead of letting them shimmer at a distance.
+    const fanCoord = fanDist.mul(16.0);
+    const fanRing = filteredPulse(fract(fanCoord), 0.4835, 0.5165, fwidth(fanCoord)).mul(inFanWell);
     const topCol = mix(color(0x889098), color(0x1b2026), inFanWell.mul(0.82).sub(fanRing.mul(0.45)));
 
     const inLouverBox = step(0.12, u.x).mul(step(u.x, 0.88)).mul(step(0.18, u.y)).mul(step(u.y, 0.82));
-    const louverSlat = step(0.45, fract(u.y.mul(14.0))).mul(inLouverBox);
+    const slatCoord = u.y.mul(14.0);
+    const louverSlat = filteredPulse(fract(slatCoord), 0.45, 1.0, fwidth(slatCoord)).mul(inLouverBox);
     const panelSeam = smoothstep(0.03, 0.0, abs(fract(u.x.mul(3.0)).sub(0.5)));
     const sideCol = mix(color(0x7c848c), color(0x282e36), max(louverSlat.mul(0.72), panelSeam.mul(0.35)));
     return mix(sideCol, topCol, isTop);

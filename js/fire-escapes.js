@@ -1,13 +1,25 @@
 import * as THREE from 'three/webgpu';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import {
   Fn, float, attribute, uv, positionGeometry, normalGeometry,
-  abs, floor, fract, mod, step, fwidth, max, min, mix
+  abs, floor, fract, mod, step, fwidth, max, min, mix, clamp
 } from 'three/tsl';
+import { filteredPulse } from './tsl-materials.js';
 
 const MAX_ESCAPES = 2400;
 const MAX_NEAR_FLOORS = 256;
-const NEAR_DISTANCE = 90;
+const NEAR_DISTANCE = 30;
 const STOREY = 3.5;
+
+// Pixel coverage, rather than a minimum one-pixel bar width, keeps distant ironwork open.
+const filteredBar = Fn(([distance, halfWidth, footprint]) => {
+  const w = max(footprint, 0.0001).toVar();
+  return clamp(float(halfWidth).add(w.mul(0.5)).sub(abs(distance)).div(w), 0, min(1, float(halfWidth).mul(2).div(w)));
+});
+const repeatingBar = (coord, halfWidth, footprint = fwidth(coord)) => filteredPulse(
+  fract(coord.add(0.5)), float(0.5).sub(halfWidth), float(0.5).add(halfWidth), footprint
+);
+const union = (a, b) => a.add(b).sub(a.mul(b));
 
 // A shared floor module: open landings, thin horizontal treads and masked iron railings.
 // Parts 0/1 are the landing/guard; 2/3 the flight/guard; 4 the raised drop ladder.
@@ -51,6 +63,25 @@ function floorGeometry() {
   return geometry;
 }
 
+// Six masked planes keep the guards, flights and ladder at the same depth as the detailed model.
+function proxyGeometry() {
+  return mergeGeometries([
+    [3.4, 0, 0.55, 0, 1],
+    [1.1, -1.7, 0, -Math.PI / 2, 1],
+    [1.1, 1.7, 0, Math.PI / 2, 1],
+    [2.4, 0, -0.17, 0, 3],
+    [2.4, 0, 0.52, 0, 3],
+    [0.34, -1.45, 0.56, 0, 4]
+  ].map(([width, x, z, rotation, part]) => {
+    const geometry = new THREE.PlaneGeometry(width, 1);
+    geometry.translate(0, 0.5, 0);
+    geometry.rotateY(rotation);
+    geometry.translate(x, 0, z);
+    geometry.setAttribute('escapePart', new THREE.Float32BufferAttribute([part, part, part, part], 1));
+    return geometry;
+  }));
+}
+
 function flagRange(attribute, count) {
   if (!count) return;
   attribute.clearUpdateRanges();
@@ -60,30 +91,31 @@ function flagRange(attribute, count) {
 
 export function createFireEscapes(group) {
   const steel = { color: 0x25292c, roughness: 0.65, metalness: 0.6 };
-  const nearMaterial = new THREE.MeshStandardNodeMaterial({ ...steel, side: THREE.DoubleSide });
-  nearMaterial.maskNode = Fn(() => {
+  const nearMaterial = new THREE.MeshStandardNodeMaterial({ ...steel, side: THREE.DoubleSide, alphaToCoverage: true });
+  nearMaterial.opacityNode = Fn(() => {
     const part = attribute('escapePart', 'float');
     const flags = attribute('escapeFlags', 'vec2');
     const u = uv();
-    const bar = (distance, halfWidth, footprint) => step(distance, max(halfWidth, footprint.mul(0.5)));
     const p = positionGeometry.xz;
     const grid = p.mul(10);
-    const bars = bar(abs(fract(grid.add(0.5)).sub(0.5)), 0.08, fwidth(grid));
-    // Frame the landing panels and their stair opening; unresolved grating fills in without shimmering.
+    const bars = union(repeatingBar(grid.x, 0.08), repeatingBar(grid.y, 0.08));
+    // Frame the landing panels and their stair opening; grating settles to its average coverage.
     const edge = min(abs(abs(p.x).sub(1.7)), abs(abs(p.x).sub(1.2)), abs(abs(p.y).sub(0.55)), abs(p.y.add(0.18)));
-    const frame = bar(edge, 0.025, max(fwidth(p.x), fwidth(p.y)));
-    const solid = mix(max(bars.x, bars.y, frame), 1, step(0.5, part));
-    const pickets = bar(abs(fract(u.x.add(0.5)).sub(0.5)), 0.08, fwidth(u.x));
-    const rail = bar(abs(u.y.sub(0.97)), 0.03, fwidth(u.y));
-    const middleRail = bar(abs(u.y.sub(0.48)), 0.018, fwidth(u.y));
-    const guard = max(pickets, rail, middleRail);
-    const ladderRails = bar(min(u.x, float(1).sub(u.x)), 0.065, fwidth(u.x));
-    const rungs = bar(abs(fract(u.y.mul(8).add(0.5)).sub(0.5)), 0.07, fwidth(u.y).mul(8));
+    const frame = filteredBar(edge, 0.025, max(fwidth(p.x), fwidth(p.y)));
+    const solid = mix(union(bars, frame), 1, step(0.5, part));
+    const pickets = repeatingBar(u.x, 0.08);
+    const rail = filteredBar(u.y.sub(0.97), 0.03, fwidth(u.y));
+    const middleRail = filteredBar(u.y.sub(0.48), 0.018, fwidth(u.y));
+    const guard = union(pickets, rail.add(middleRail));
+    const ladderRails = filteredBar(min(u.x, float(1).sub(u.x)), 0.065, fwidth(u.x));
+    const rungs = repeatingBar(u.y.mul(8), 0.07);
     const ladder = step(3.5, part);
     const flight = step(1.5, part).mul(float(1).sub(ladder));
     const visible = mix(1, flags.x, flight).mul(mix(1, flags.y, ladder));
-    return mix(mix(solid, guard, mod(part, 2)), max(ladderRails, rungs), ladder).mul(visible).greaterThan(0.5);
-  })();
+    return mix(mix(solid, guard, mod(part, 2)), union(ladderRails, rungs), ladder).mul(visible);
+  })().toVar();
+  nearMaterial.maskNode = nearMaterial.opacityNode.greaterThan(0);
+  nearMaterial.maskShadowNode = nearMaterial.opacityNode.greaterThan(0.5);
 
   const geometry = floorGeometry();
   const mirrored = geometry.clone();
@@ -101,34 +133,60 @@ export function createFireEscapes(group) {
     return mesh;
   });
 
-  const farGeometry = new THREE.BoxGeometry(1, 1, 1);
+  const farGeometry = proxyGeometry();
   const farData = new THREE.InstancedBufferAttribute(new Float32Array(MAX_ESCAPES * 2), 2);
   farGeometry.setAttribute('escapeSize', farData);
-  const farMaterial = new THREE.MeshStandardNodeMaterial(steel);
-  farMaterial.maskNode = Fn(() => {
-    const size = attribute('escapeSize', 'vec2'); // Storey and total escape height.
-    const across = positionGeometry.x.add(0.5).mul(3.4);
-    const height = positionGeometry.y.add(0.5).mul(size.y);
+  const farMaterial = new THREE.MeshStandardNodeMaterial({ ...steel, side: THREE.DoubleSide, alphaToCoverage: true });
+  farMaterial.opacityNode = Fn(() => {
+    const part = attribute('escapePart', 'float');
+    const size = attribute('escapeSize', 'vec2'); // Storey and nominal escape height.
+    const scale = size.x.div(STOREY);
+    const across = positionGeometry.x.add(1.7);
+    // Include the raised ladder below the first landing and the scaled top guard.
+    const height = positionGeometry.y.mul(size.y.sub(1).add(scale.mul(3.2))).sub(scale.mul(2.2));
     const level = height.div(size.x);
-    const up = fract(level).mul(size.x);
     const py = fwidth(height);
-    const px = fwidth(across);
-    const bar = (distance, halfWidth, footprint) => step(distance, max(halfWidth, footprint.mul(0.5)));
+    const levelWidth = py.div(size.x);
     const front = abs(normalGeometry.z);
-    const along = mix(positionGeometry.z.add(0.5).mul(1.1), across, front);
-    const pickets = bar(abs(fract(along.div(0.17).add(0.5)).sub(0.5)).mul(0.17), 0.014, fwidth(along));
-    const guards = max(pickets.mul(step(up, 1)), bar(abs(up.sub(0.97)), 0.03, py), bar(abs(up.sub(0.48)), 0.02, py));
-    const deck = bar(abs(up.sub(0.04)), 0.05, py);
-    const flightX = mix(across, float(3.4).sub(across), mod(floor(level), 2));
-    const flightY = flightX.sub(0.5).mul(size.x.div(2.4));
-    const slopeWidth = px.mul(size.x.div(2.4)).add(py);
-    const stringer = bar(abs(up.sub(flightY)), 0.07, slopeWidth);
-    const handrail = bar(abs(up.sub(flightY).sub(0.97)), 0.03, slopeWidth);
-    const hasFlight = step(floor(level).add(1), floor(size.y.div(size.x)));
-    const stairs = max(stringer, handrail).mul(step(0.5, flightX)).mul(step(flightX, 2.9)).mul(hasFlight).mul(front);
-    // Open top and bottom: the distant proxy must not look like a solid roof over the stairwell.
-    return max(deck, guards, stairs).mul(step(abs(normalGeometry.y), 0.5)).greaterThan(0.5);
-  })();
+    const along = mix(positionGeometry.z.add(0.55), across, front);
+    const bay = along.mul(mix(6 / 1.1, 20 / 3.4, front));
+    const pickets = repeatingBar(bay, 0.08);
+    const guardHeight = filteredPulse(fract(level), 0, 1 / STOREY, levelWidth);
+    const rails = repeatingBar(level.sub(0.97 / STOREY), 0.03 / STOREY, levelWidth)
+      .add(repeatingBar(level.sub(0.48 / STOREY), 0.018 / STOREY, levelWidth));
+    const guards = union(pickets.mul(guardHeight), rails);
+    const deck = repeatingBar(level.sub(float(0.04).div(size.x)), float(0.05).div(size.x), levelWidth);
+    const flight = (index) => {
+      const parity = mod(index, 2);
+      const x = mix(across, float(3.4).sub(across), parity).sub(0.5);
+      const y = height.sub(index.mul(size.x));
+      const railY = y.sub(x.mul(size.x.div(2.4))).div(scale);
+      // Differentiate the flight before floor selection reverses its slope at the next landing.
+      const slope = mix(float(1), float(-1), parity).mul(size.x.div(2.4));
+      const footprint = abs(height.dFdx().sub(across.dFdx().mul(slope)))
+        .add(abs(height.dFdy().sub(across.dFdy().mul(slope)))).div(scale);
+      const bay = x.mul(14 / 2.4);
+      const pickets = repeatingBar(bay, 0.08, fwidth(across).mul(14 / 2.4)).mul(filteredBar(railY.sub(0.5), 0.5, footprint));
+      const rails = filteredBar(railY.add(0.025), 0.055, footprint)
+        .add(filteredBar(railY.sub(0.97), 0.03, footprint)).add(filteredBar(railY.sub(0.48), 0.018, footprint));
+      const stepHeight = size.x.div(16);
+      // Horizontal tread bands clipped to the diagonal flight avoid sampling a discontinuous staircase.
+      const treads = repeatingBar(y.div(stepHeight), float(0.01).div(stepHeight), py.div(stepHeight))
+        .mul(filteredBar(railY.sub(STOREY / 32), float(STOREY / 32).add(float(0.01).div(scale)), footprint));
+      const visible = step(0, index).mul(step(index.add(1), floor(size.y.div(size.x))));
+      return union(union(pickets, rails), treads).mul(visible);
+    };
+    // A flight's guard continues above the next landing, where the following flight reverses direction.
+    const stairs = union(flight(floor(level)), flight(floor(level).sub(1)));
+    const ladderX = across.sub(0.08).div(0.34);
+    const ladderY = height.div(scale).add(2.2).div(2.15);
+    const ladderRails = filteredBar(min(ladderX, float(1).sub(ladderX)), 0.065, fwidth(ladderX));
+    const rungs = repeatingBar(ladderY.mul(8), 0.07);
+    const ladder = union(ladderRails, rungs).mul(filteredBar(ladderY.sub(0.5), 0.5, fwidth(ladderY)));
+    return mix(mix(union(deck, guards).mul(step(0, height)), stairs, step(1.5, part)), ladder, step(3.5, part));
+  })().toVar();
+  farMaterial.maskNode = farMaterial.opacityNode.greaterThan(0);
+  farMaterial.maskShadowNode = farMaterial.opacityNode.greaterThan(0.5);
   const far = new THREE.InstancedMesh(farGeometry, farMaterial, MAX_ESCAPES);
   far.name = 'FireEscapesFar';
   for (const mesh of [...near, far]) {
@@ -162,8 +220,10 @@ export function createFireEscapes(group) {
         }
         nearFloors += fe.landings;
       } else {
-        dummy.position.set(fe.x, fe.y + fe.h * 0.5, fe.z);
-        dummy.scale.set(3.4, fe.h, 1.1);
+        const scale = fe.storey / STOREY;
+        const height = fe.h - 1 + scale * 3.2;
+        dummy.position.set(fe.x, fe.y - scale * 2.2, fe.z);
+        dummy.scale.set(1, height, 1);
         dummy.updateMatrix();
         far.setMatrixAt(farCount, dummy.matrix);
         farData.setXY(farCount++, fe.storey, fe.h);

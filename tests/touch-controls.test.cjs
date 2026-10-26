@@ -48,12 +48,12 @@ function harness({ coarse = true, mode = 'person' } = {}) {
   const root = element();
   const stick = element();
   const knob = element();
-  const buttons = Object.fromEntries(['boost', 'up', 'down'].map((action) => [action, element({ 'data-touch-action': action })]));
+  const buttons = Object.fromEntries(['up', 'down'].map((action) => [action, element({ 'data-touch-action': action })]));
   const labels = Object.fromEntries(Object.keys(buttons).map((action) => [action, element()]));
   root.querySelectorAll = () => Object.values(buttons);
   root.querySelector = (selector) => labels[selector.match(/"(.*?)"/)[1]];
   document.getElementById = (id) => ({ 'touch-controls': root, 'touch-stick': stick, 'touch-stick-knob': knob })[id];
-  const input = Object.fromEntries(['forward', 'backward', 'left', 'right', 'up', 'down', 'boost'].map((action) => [action, 0]));
+  const input = Object.fromEntries(['forward', 'backward', 'left', 'right', 'up', 'down'].map((action) => [action, 0]));
   const controller = {
     activeMode: mode,
     setTouchInput(action, value) { input[action] = value; },
@@ -86,49 +86,48 @@ test('stick preserves analog strength and normalizes diagonal input with a radia
 });
 
 test('stick and multiple held button pointers release independently', () => {
-  const { stick, buttons, input } = harness();
+  const { stick, buttons, input } = harness({ mode: 'helicopter' });
   stick.dispatch('pointerdown', { clientY: 20 });
-  buttons.boost.dispatch('pointerdown', { pointerId: 2 });
-  buttons.boost.dispatch('pointerdown', { pointerId: 3 });
-  buttons.up.dispatch('pointerdown', { pointerId: 4 });
+  buttons.up.dispatch('pointerdown', { pointerId: 2 });
+  buttons.up.dispatch('pointerdown', { pointerId: 3 });
+  buttons.down.dispatch('pointerdown', { pointerId: 4 });
   assert.equal(input.forward, 1);
-  assert.equal(input.boost, 1);
   assert.equal(input.up, 1);
+  assert.equal(input.down, 1);
   stick.dispatch('pointermove', { pointerId: 5, clientY: 108 });
   assert.equal(input.forward, 1, 'an unrelated camera pointer cannot move the stick');
-  buttons.boost.dispatch('pointerup', { pointerId: 2 });
-  assert.equal(input.boost, 1, 'the second boost pointer remains held');
-  assert.equal(buttons.boost.getAttribute('aria-pressed'), 'true');
+  buttons.up.dispatch('pointerup', { pointerId: 2 });
+  assert.equal(input.up, 1, 'the second ascend pointer remains held');
+  assert.equal(buttons.up.getAttribute('aria-pressed'), 'true');
   stick.dispatch('pointerup');
   assert.equal(input.forward, 0);
-  assert.equal(input.boost, 1);
   assert.equal(input.up, 1);
-  buttons.boost.dispatch('pointerup', { pointerId: 3 });
-  assert.equal(input.boost, 0);
-  assert.equal(buttons.boost.classList.contains('is-pressed'), false);
-  assert.equal(buttons.boost.getAttribute('aria-pressed'), 'false');
-  assert.equal(input.up, 1);
+  assert.equal(input.down, 1);
+  buttons.up.dispatch('pointerup', { pointerId: 3 });
+  assert.equal(input.up, 0);
+  assert.equal(buttons.up.classList.contains('is-pressed'), false);
+  assert.equal(buttons.up.getAttribute('aria-pressed'), 'false');
+  assert.equal(input.down, 1);
 });
 
 for (const type of ['pointercancel', 'lostpointercapture']) {
   test(`${type} clears only the affected pointer and its feedback`, () => {
     const { stick, knob, buttons, input } = harness();
     stick.dispatch('pointerdown', { clientX: 20 });
-    buttons.boost.dispatch('pointerdown', { pointerId: 2 });
+    buttons.up.dispatch('pointerdown', { pointerId: 2 });
     stick.dispatch(type);
     assert.equal(input.left, 0);
-    assert.equal(input.boost, 1);
+    assert.equal(input.up, 1);
     assert.equal(stick.classList.contains('is-pressed'), false);
     assert.equal(knob.style.getPropertyValue('--stick-x'), '0px');
-    buttons.boost.dispatch(type, { pointerId: 2 });
-    assert.equal(input.boost, 0);
-    assert.equal(buttons.boost.getAttribute('aria-pressed'), 'false');
+    buttons.up.dispatch(type, { pointerId: 2 });
+    assert.equal(input.up, 0);
+    assert.equal(buttons.up.getAttribute('aria-pressed'), 'false');
   });
 }
 
 test('mode changes clear touches and expose the relevant actions', () => {
   const { controls, stick, buttons, labels, input } = harness();
-  assert.equal(labels.boost.textContent, 'Sprint');
   assert.equal(labels.up.textContent, 'Jump');
   assert.equal(buttons.up.hidden, false);
   assert.equal(buttons.down.hidden, true);
@@ -138,7 +137,6 @@ test('mode changes clear touches and expose the relevant actions', () => {
   assert.equal(Object.values(input).some(Boolean), false);
   assert.equal(stick.hasPointerCapture(1), false);
   assert.equal(buttons.up.hasPointerCapture(2), false);
-  assert.equal(labels.boost.textContent, 'Boost');
   assert.equal(labels.up.textContent, 'Ascend');
   assert.equal(buttons.up.hidden, false);
   assert.equal(buttons.down.hidden, false);
@@ -148,7 +146,6 @@ test('mode changes clear touches and expose the relevant actions', () => {
   buttons.up.dispatch('pointerdown', { pointerId: 3 });
   assert.equal(input.up, 0, 'hidden actions cannot receive input');
   controls.setMode('cyclist');
-  assert.equal(labels.boost.textContent, 'Sprint');
   assert.equal(buttons.up.hidden, true);
   assert.equal(buttons.down.hidden, true);
 });
@@ -156,12 +153,12 @@ test('mode changes clear touches and expose the relevant actions', () => {
 test('disabling controls clears held input and blocks new input until enabled', () => {
   const { controls, root, stick, buttons, input } = harness();
   stick.dispatch('pointerdown', { clientY: 20 });
-  buttons.boost.dispatch('pointerdown', { pointerId: 2 });
+  buttons.up.dispatch('pointerdown', { pointerId: 2 });
   controls.setEnabled(false);
   assert.equal(root.hidden, true);
   assert.equal(Object.values(input).some(Boolean), false);
   stick.dispatch('pointerdown', { clientY: 20 });
-  buttons.boost.dispatch('pointerdown', { pointerId: 3 });
+  buttons.up.dispatch('pointerdown', { pointerId: 3 });
   assert.equal(Object.values(input).some(Boolean), false);
   controls.setEnabled(true);
   assert.equal(root.hidden, false);
@@ -173,7 +170,7 @@ for (const interruption of ['blur', 'hidden', 'resize']) {
   test(`${interruption} resets all held input and pointer captures`, () => {
     const { window, document, stick, buttons, input } = harness();
     stick.dispatch('pointerdown', { clientY: 20 });
-    buttons.boost.dispatch('pointerdown', { pointerId: 2 });
+    buttons.up.dispatch('pointerdown', { pointerId: 2 });
     if (interruption === 'hidden') {
       document.hidden = true;
       document.dispatch('visibilitychange');
@@ -182,7 +179,7 @@ for (const interruption of ['blur', 'hidden', 'resize']) {
     }
     assert.equal(Object.values(input).some(Boolean), false);
     assert.equal(stick.hasPointerCapture(1), false);
-    assert.equal(buttons.boost.hasPointerCapture(2), false);
+    assert.equal(buttons.up.hasPointerCapture(2), false);
   });
 }
 

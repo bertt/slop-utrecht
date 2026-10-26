@@ -953,6 +953,23 @@ const GAIT = {
 const HEEL = new THREE.Vector3(0, -ANKLE_H, -0.07); // heel contact, from the ankle
 const TOE_JOINT = new THREE.Vector3(0, 0.02 - ANKLE_H, 0.135);
 
+const PEDESTRIAN_DIVE_DURATION = 2.5;
+// Time, pelvis height/pitch, chest/head pitch, hand height/forward/spread, left and right ankle height/forward,
+// foot pitch. The hands catch the landing; a short prone pause leads into a push-up, one knee under the body,
+// and a staggered rise. Positions are metres in the escape direction, before each person's height scaling.
+const DIVE_POSES = [
+  [0,    0.957, 0.035, 0.05, 0.05, 0.82, 0.03, 0.23, 0.08, 0,     0.08, 0,     0],
+  [0.12, 0.79,  0.38,  0.50, 0.10, 0.76, 0.42, 0.27, 0.08, -0.06, 0.08, 0.10,  0.15],
+  [0.30, 1.10,  0.88,  1.05, 0.65, 0.92, 0.76, 0.29, 0.61, -0.55, 0.72, -0.52, 0.9],
+  [0.55, 0.50,  1.45,  1.46, 1.05, 0.10, 0.72, 0.32, 0.32, -0.70, 0.41, -0.64, 1.35],
+  [0.72, 0.135, 1.49,  1.45, 1.10, 0.08, 0.60, 0.32, 0.16, -0.80, 0.19, -0.76, 1.4],
+  [1.15, 0.135, 1.49,  1.45, 1.10, 0.08, 0.60, 0.32, 0.16, -0.80, 0.19, -0.76, 1.4],
+  [1.55, 0.40,  1.10,  1.00, 0.25, 0.11, 0.57, 0.30, 0.10, -0.44, 0.12, -0.50, 0.9],
+  [1.90, 0.65,  0.55,  0.60, 0.10, 0.62, 0.40, 0.27, 0.08, 0.15,  0.12, -0.35, 0.3],
+  [2.20, 0.83,  0.20,  0.30, 0.08, 0.80, 0.20, 0.25, 0.08, 0.03,  0.08, -0.03, 0],
+  [PEDESTRIAN_DIVE_DURATION, 0.957, 0.035, 0.05, 0.05, 0.82, 0.03, 0.23, 0.08, 0, 0.08, 0, 0]
+];
+
 const wrap = (a) => a - Math.round(a / (Math.PI * 2)) * Math.PI * 2;
 const clamp01 = (x) => (x < 0 ? 0 : x > 1 ? 1 : x);
 const smooth = (e0, e1, x) => {
@@ -1033,6 +1050,8 @@ class PersonRig {
     this.pelvisY = 0;
     this.sway = 0;
     this.air = 0;
+    this.diving = false;
+    this.diveGround = 0;
     this.time = seed * 7.3;
     this.feet = [makeFoot(1), makeFoot(-1)];
     this.pose = new Float32Array(STRIDE * 4);
@@ -1051,6 +1070,7 @@ class PersonRig {
     this.yaw = yaw;
     this.vx = this.vz = this.speed = 0;
     this.gait = this.run = this.sway = this.air = 0;
+    this.diving = false;
     this.phase = 0.05;
     for (const foot of this.feet) {
       this.restPoint(foot, x, z, yaw, _v);
@@ -1094,15 +1114,37 @@ class PersonRig {
    * Walk the body to ground position (x, z), turning towards `heading`. `ground(owner, x, z)` gives the walking
    * surface's height anywhere around. `air` lifts the body off the ground (jumps). Set `updatePose` false for hidden
    * pedestrians: their gait and planted feet still advance, while bone transforms wait until they are drawn.
+   * `diveTime` is elapsed seconds in an evasive dive, or -1 for ordinary locomotion.
    */
-  update(dt, x, z, heading, ground, owner = null, air = 0, updatePose = true) {
+  update(dt, x, z, heading, ground, owner = null, air = 0, updatePose = true, diveTime = -1) {
     if (!this.placed || Math.hypot(x - this.x, z - this.z) > 3) {
       this.reset(x, z, heading, ground, owner);
-      return;
+      if (diveTime < 0) return;
     }
     dt = Math.min(Math.max(dt, 1e-4), 0.1);
     const s = this.s;
     this.time += dt;
+
+    if (diveTime >= 0) {
+      if (!this.diving) this.diveGround = ground(owner, this.x, this.z);
+      const groundY = ground(owner, x, z);
+      // Crossing a curb in flight changes the landing surface, without stepping the whole airborne body.
+      // Travel ends before .55 s; settle exactly onto the surface by the prone pose at .72 s.
+      this.diveGround += (groundY - this.diveGround) * (diveTime >= 0.72 ? 1 : 1 - Math.exp(-dt / 0.06));
+      this.diving = true;
+      this.x = x;
+      this.z = z;
+      this.yaw = wrap(this.yaw + Math.max(-10 * dt, Math.min(10 * dt, wrap(heading - this.yaw))));
+      this.vx = this.vz = this.speed = this.gait = this.run = this.air = 0;
+      if (updatePose) this.solveDive(diveTime, this.diveGround);
+      return;
+    }
+    if (this.diving) {
+      this.pelvisYaw = this.pelvisRoll = this.spreadF = 0;
+      this.pelvisTilt = 0.035;
+      this.reset(x, z, this.yaw, ground, owner);
+      return;
+    }
 
     // Body velocity (smoothed) and heading
     const kv = 1 - Math.exp(-dt / 0.1);
@@ -1360,6 +1402,77 @@ class PersonRig {
     return _ankle;
   }
 
+  // Grounded escape animation, independent of the walking gait and evaluated only for visible people.
+  solveDive(time, groundY) {
+    const s = this.s;
+    const j = this.bind;
+    let frame = 0;
+    while (frame < DIVE_POSES.length - 2 && time > DIVE_POSES[frame + 1][0]) frame++;
+    const a = DIVE_POSES[frame];
+    const b = DIVE_POSES[frame + 1];
+    const t = smooth(a[0], b[0], time);
+    const pitch = lerp(a[2], b[2], t);
+    const footPitch = lerp(a[12], b[12], t);
+    const footClearance = ANKLE_H * Math.cos(footPitch) + 0.208 * Math.sin(footPitch);
+    qY(_qRoot, this.yaw);
+    _qPelvis.copy(_qRoot).multiply(qX(_q, pitch));
+    _pelvis.set(this.x, groundY + lerp(a[1], b[1], t) * s, this.z);
+    this.pelvisY = _pelvis.y;
+    this.writeBone(BONE.PELVIS, _qPelvis, _pelvis);
+    _qChest.copy(_qRoot).multiply(qX(_q, lerp(a[3], b[3], t)));
+    _chest.copy(j[BONE.CHEST]).sub(j[BONE.PELVIS]).multiplyScalar(s).applyQuaternion(_qPelvis).add(_pelvis);
+    this.writeBone(BONE.CHEST, _qChest, _chest);
+    _qa.copy(_qRoot).multiply(qX(_q, lerp(a[4], b[4], t)));
+    _v.copy(j[BONE.HEAD]).sub(j[BONE.CHEST]).multiplyScalar(s).applyQuaternion(_qChest).add(_chest);
+    this.writeBone(BONE.HEAD, _qa, _v);
+
+    for (let i = 0; i < 2; i++) {
+      const side = SIDES[i];
+      _shoulder.copy(j[LIMB.upperArm[i]]).sub(j[BONE.CHEST]).multiplyScalar(s).applyQuaternion(_qChest).add(_chest);
+      _target.set(side * lerp(a[7], b[7], t), lerp(a[5], b[5], t), lerp(a[6], b[6], t))
+        .multiplyScalar(s).applyQuaternion(_qRoot);
+      _target.x += this.x;
+      _target.y += groundY;
+      _target.z += this.z;
+      _pole.set(side * 0.9, 0.25, -0.5).applyQuaternion(_qRoot);
+      this.solveDiveLimb(LIMB.upperArm[i], LIMB.forearm[i], _shoulder, _target,
+        UPPER_ARM * s, (FOREARM + 0.07) * s, side * ARM_BIND_ABDUCTION);
+
+      _hip.copy(j[LIMB.thigh[i]]).sub(j[BONE.PELVIS]).multiplyScalar(s).applyQuaternion(_qPelvis).add(_pelvis);
+      const ankleIndex = 8 + i * 2;
+      _target.set(side * GAIT.spread, Math.max(footClearance, lerp(a[ankleIndex], b[ankleIndex], t)), lerp(a[ankleIndex + 1], b[ankleIndex + 1], t))
+        .multiplyScalar(s).applyQuaternion(_qRoot);
+      _target.x += this.x;
+      _target.y += groundY;
+      _target.z += this.z;
+      // Knees fold towards the chest, then tuck beneath the hips for the rise. A little outward bend keeps
+      // the knees clear of the pavement when the body is lying flat.
+      _pole.set(side * 0.45 * Math.sin(pitch), -0.2 * Math.sin(pitch), Math.cos(pitch)).applyQuaternion(_qRoot);
+      this.solveDiveLimb(LIMB.thigh[i], LIMB.shin[i], _hip, _target, THIGH * s, SHIN * s);
+      _qa.copy(_qRoot).multiply(qX(_q, footPitch));
+      this.writeBone(LIMB.foot[i], _qa, _ankle);
+      _v.copy(j[LIMB.toe[i]]).sub(j[LIMB.foot[i]]).multiplyScalar(s).applyQuaternion(_qa).add(_ankle);
+      this.writeBone(LIMB.toe[i], _qa, _v);
+    }
+  }
+
+  // Two-bone reach with an explicit bend direction for the bracing arms and folded legs of the dive.
+  solveDiveLimb(upper, lower, root, target, l1, l2, bindTilt = 0) {
+    _v.subVectors(target, root);
+    const length = _v.length();
+    _v.divideScalar(length || 1);
+    const dist = Math.max(Math.abs(l1 - l2) + 1e-3, Math.min((l1 + l2) * 0.999, length));
+    _pole.addScaledVector(_v, -_pole.dot(_v)).normalize();
+    const cosA = (l1 * l1 + dist * dist - l2 * l2) / (2 * l1 * dist);
+    _knee.copy(root).addScaledVector(_v, l1 * cosA).addScaledVector(_pole, l1 * Math.sqrt(Math.max(0, 1 - cosA * cosA)));
+    _ankle.copy(root).addScaledVector(_v, dist);
+    _front.set(0, 0, 1).applyQuaternion(_qChest);
+    this.basis(_v2.subVectors(root, _knee), _front, _qUpper).multiply(qZ(_q, -bindTilt));
+    this.writeBone(upper, _qUpper, root);
+    this.basis(_v2.subVectors(_knee, _ankle), _front, _q2).multiply(qZ(_q, -bindTilt));
+    this.writeBone(lower, _q2, _knee);
+  }
+
   // Bones of the whole body from the feet, pelvis and gait state (world space)
   solve() {
     const s = this.s;
@@ -1495,4 +1608,4 @@ class PersonRig {
   }
 }
 
-export { BONE as PERSON_BONES, buildPersonGeometry, createPersonMaterial, PersonCrowd, PersonRig };
+export { BONE as PERSON_BONES, buildPersonGeometry, createPersonMaterial, PersonCrowd, PersonRig, PEDESTRIAN_DIVE_DURATION };

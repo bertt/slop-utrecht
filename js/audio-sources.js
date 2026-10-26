@@ -11,7 +11,7 @@ function driveLoad(keys, speed, cyclist) {
   // Match the controller's forward priority, and distinguish propulsion from braking.
   const throttle = unit(+keys.forward) || -unit(+keys.backward) * (cyclist ? 0.6 : 1);
   if ((cyclist && throttle <= 0) || speed * throttle < 0) return 0;
-  return unit(Math.abs(throttle) * (cyclist || keys.boost ? 1 : 0.8));
+  return Math.abs(throttle);
 }
 
 function helicopterVerticalSpeed(entity) {

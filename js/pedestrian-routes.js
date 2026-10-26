@@ -143,7 +143,13 @@ function createPedestrianRoutes({ walkable, onSidewalk }, blockAt) {
     return best;
   }
 
-  return { along, across, next };
+  function canDodge(p, offset) {
+    const block = blockAt(p.x, p.z);
+    const target = { x: p.ax + p.ux * p.t + p.uz * offset, z: p.az + p.uz * p.t - p.ux * offset };
+    return !!block && onSidewalk(target.x, target.z) && cornerClear(p, target, block);
+  }
+
+  return { along, across, next, canDodge };
 }
 
 export { createPedestrianRoutes };
