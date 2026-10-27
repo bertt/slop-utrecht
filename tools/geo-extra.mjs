@@ -18,7 +18,6 @@ for (const p of parksRaw) {
 }
 // Coverage of every block by park land: scanline-fill each park ring over the block raster
 const W = R.w, H = R.h;
-const parkCells = new Float64Array(blocks.length + 1);
 // blocks don't carry their raster label: recover it from a point inside each block's lot rect or polygon
 for (const b of blocks) {
   const r = b.rects[0];

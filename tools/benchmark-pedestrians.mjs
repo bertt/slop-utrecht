@@ -29,8 +29,7 @@ function rigClass(code) {
 const BaselineRig = rigClass(alwaysSolve);
 const DeferredRig = rigClass(source);
 const ground = (_owner, x) => x % 30 < 15 ? 0.22 : 0;
-const diagnosticKeys = new Set(['pose', 'reachError', 'stanceReachError']);
-const gaitState = (rig) => JSON.stringify(rig, (key, value) => diagnosticKeys.has(key) ? undefined : value);
+const gaitState = (rig) => JSON.stringify(rig, (key, value) => key === 'pose' ? undefined : value);
 const equalPose = (a, b, message) => assert.ok(a.length === b.length && a.every((value, i) => Number.isFinite(value) && Object.is(value, b[i])), message);
 
 // Hidden stretches include walking, stopping, turning, jumping and relocation. On returning to view, the full

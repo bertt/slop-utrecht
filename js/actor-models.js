@@ -25,12 +25,8 @@ import {
 } from 'three/tsl';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 
-// js/actor-models.js
-// Realistic 3D Lofted Vehicle Geometry + TSL Materials (the skinned, animated people are in pedestrians.js)
-// Ported and adapted from Three.js webgpu_generator_city:
-// - LoftGeometry.js (skinning 3D cross-section rings with arc-length UVs, smooth seam normals & Newell caps)
-// - CarGenerator.js (lofted sedan/taxi/SUV/NYPD bodies with circular wheel arches, curved cabin windscreens,
-//   crowned roofs, LatheGeometry tyres & recessed 5-spoke alloy wheels, side mirrors, roof signs & TSL fascia/seams)
+// Vehicle geometry and materials adapted from Three.js LoftGeometry and CarGenerator.
+// Skinned character models and animation are in pedestrians.js.
 
 const _vector = new THREE.Vector3();
 const _down = new THREE.Vector3(0, -1, 0);
@@ -1063,8 +1059,9 @@ function createLoftedCarMaterial(spec, fixedColorHex = null) {
   // Glasshouse: side windows (minus the B / C pillars), windshield & backlight, their black seals, chrome sill strip
   let sideG = polygonDistance(p.z, p.y, sideGlassPlanes, 0.07);
   for (const zp of cab.pillars) sideG = max(sideG, float(0.036).sub(abs(p.z.sub(zp))));
-  const backlight = coverage(polygonDistance(ax, p.z, rearGlassPlanes, 0.09)).mul(isWindow);
-  const glass = max(max(coverage(sideG), coverage(polygonDistance(ax, p.z, frontGlassPlanes, 0.09))), backlight.div(max(isWindow, 1e-4)))
+  const rearGlass = coverage(polygonDistance(ax, p.z, rearGlassPlanes, 0.09));
+  const backlight = rearGlass.mul(isWindow);
+  const glass = max(max(coverage(sideG), coverage(polygonDistance(ax, p.z, frontGlassPlanes, 0.09))), rearGlass)
     .mul(isWindow);
   const seal = max(
     coverage(polygonDistance(p.z, p.y, sideSealPlanes, 0.07)),
@@ -1653,11 +1650,8 @@ function heliFuselageSection(z, halfW, botY, topY, bellyFlat = 0.68, shoulderRat
   return [...bottomCenter, ...right, ...left].reverse();
 }
 
-/**
- * Helper to create an 8-point symmetric airfoil / cowling cross-section.
- */
-function heliAirfoilSection(xCenter, yCenter, zCenter, halfThickX, halfHeightY, chordZ) {
-  // Airfoil lying along Z (for vertical fin) or X (for horizontal stabilizer)
+// Six-point cross-section for the vertical fin and winglets.
+function heliAirfoilSection(xCenter, yCenter, zCenter, halfThickX, chordZ) {
   return [
     new THREE.Vector3(xCenter, yCenter, zCenter + chordZ * 0.5),
     new THREE.Vector3(xCenter + halfThickX, yCenter, zCenter + chordZ * 0.18),
@@ -1716,14 +1710,14 @@ function buildHelicopterBodyGeometry() {
   // 3. 3D Lofted Swept Vertical Tail Fin (Airfoil cross-sections sweeping from z = -5.15 to -6.15)
   // Upper swept fin + lower ventral tail bumper fin
   const vFinProfile = [
-    [-0.02, 0.88, -5.28, 0.05, 0.0, 0.44], // Ventral tail fin tip
-    [0.0,   1.48, -5.25, 0.12, 0.0, 0.88], // Tailboom junction root
-    [0.0,   1.95, -5.52, 0.10, 0.0, 0.76], // Mid swept vertical fin
-    [0.0,   2.48, -5.82, 0.08, 0.0, 0.60], // Upper swept vertical fin
-    [0.0,   2.82, -6.04, 0.05, 0.0, 0.42]  // Top anti-collision beacon tip
+    [-0.02, 0.88, -5.28, 0.05, 0.44], // Ventral tail fin tip
+    [0.0,   1.48, -5.25, 0.12, 0.88], // Tailboom junction root
+    [0.0,   1.95, -5.52, 0.10, 0.76], // Mid swept vertical fin
+    [0.0,   2.48, -5.82, 0.08, 0.60], // Upper swept vertical fin
+    [0.0,   2.82, -6.04, 0.05, 0.42]  // Top anti-collision beacon tip
   ];
-  const vFinSections = vFinProfile.map(([x, y, z, hx, hy, cz]) =>
-    heliAirfoilSection(x, y, z, hx, hy, cz).reverse()
+  const vFinSections = vFinProfile.map(([x, y, z, hx, cz]) =>
+    heliAirfoilSection(x, y, z, hx, cz).reverse()
   );
   parts.push(part(new LoftGeometry(vFinSections, { capStart: true, capEnd: true }), HELI_PARTS.FIN));
 
@@ -1754,7 +1748,7 @@ function buildHelicopterBodyGeometry() {
       [0.0,   0.036, 0.38],
       [0.26,  0.024, 0.26]
     ].map(([dy, hx, cz]) =>
-      heliAirfoilSection(wx + side * Math.abs(dy) * 0.12, 1.54 + dy, wz - Math.abs(dy) * 0.15, hx, 0, cz).reverse()
+      heliAirfoilSection(wx + side * Math.abs(dy) * 0.12, 1.54 + dy, wz - Math.abs(dy) * 0.15, hx, cz).reverse()
     );
     parts.push(part(new LoftGeometry(winglet, { capStart: true, capEnd: true }), HELI_PARTS.FIN));
   }
@@ -1875,48 +1869,48 @@ function createLoftedHelicopterMaterial() {
 
   const mat = new THREE.MeshStandardNodeMaterial();
 
+  const partId = attribute('partId', 'float');
+  const isCowling = step(abs(partId.sub(HELI_PARTS.COWLING)), 0.25);
+  const isFin = step(abs(partId.sub(HELI_PARTS.FIN)), 0.25);
+  const isSkid = step(abs(partId.sub(HELI_PARTS.SKID)), 0.25);
+  const isRotor = step(abs(partId.sub(HELI_PARTS.ROTOR)), 0.25);
+  const isExhaust = step(abs(partId.sub(HELI_PARTS.EXHAUST)), 0.25);
+  const isFuselage = step(abs(partId.sub(HELI_PARTS.FUSELAGE)), 0.25);
+
+  const p = attribute('position', 'vec3').toVar();
+  const n = attribute('normal', 'vec3').toVar();
+
+  // 1. Panoramic Wrap-Around Cockpit Windscreen & Sightseeing Side Cabin Windows (on Fuselage)
+  // Front windscreen: z in [0.95, 2.52], y in [0.98, 1.88], split by narrow center post at x = 0
+  const frontGlassOuter = roundedRect(vec2(p.z.sub(1.74), p.y.sub(1.42)), vec2(0.76, 0.42), 0.14)
+    .mul(step(0.65, p.z));
+  const centerPost = smoothstep(0.022, 0.036, abs(p.x));
+  const aPillar = smoothstep(0.028, 0.044, abs(p.z.sub(1.06)));
+  const bPillar = smoothstep(0.026, 0.042, abs(p.z.sub(0.08)));
+
+  // Lower nose chin bubble windows (for pilot downward visibility)
+  const chinWindow = roundedRect(vec2(abs(p.x).sub(0.28), p.y.sub(0.84)), vec2(0.19, 0.11), 0.04)
+    .mul(smoothstep(1.95, 2.15, p.z))
+    .mul(smoothstep(2.68, 2.52, p.z));
+
+  // Wide panoramic passenger sightseeing side windows: z in [-0.78, 1.02], y in [1.02, 1.74]
+  const sideWindow = roundedRect(vec2(p.z.sub(0.12), p.y.sub(1.38)), vec2(0.88, 0.34), 0.10)
+    .mul(step(0.45, abs(n.x)));
+
+  // Overhead cockpit eyebrow skylight windows
+  const skylight = roundedRect(vec2(abs(p.x).sub(0.32), p.z.sub(1.25)), vec2(0.20, 0.38), 0.06)
+    .mul(step(1.72, p.y));
+
+  const rawWindowMask = max(
+    max(frontGlassOuter.mul(centerPost), sideWindow),
+    max(chinWindow, skylight)
+  )
+    .mul(aPillar)
+    .mul(bPillar)
+    .mul(isFuselage)
+    .toVar();
+
   const evaluateHeliSurface = Fn(() => {
-    const partId = attribute('partId', 'float');
-    const isCowling = step(abs(partId.sub(HELI_PARTS.COWLING)), 0.25);
-    const isFin = step(abs(partId.sub(HELI_PARTS.FIN)), 0.25);
-    const isSkid = step(abs(partId.sub(HELI_PARTS.SKID)), 0.25);
-    const isRotor = step(abs(partId.sub(HELI_PARTS.ROTOR)), 0.25);
-    const isExhaust = step(abs(partId.sub(HELI_PARTS.EXHAUST)), 0.25);
-    const isFuselage = step(abs(partId.sub(HELI_PARTS.FUSELAGE)), 0.25);
-
-    const p = attribute('position', 'vec3').toVar();
-    const n = attribute('normal', 'vec3').toVar();
-
-    // 1. Panoramic Wrap-Around Cockpit Windscreen & Sightseeing Side Cabin Windows (on Fuselage)
-    // Front windscreen: z in [0.95, 2.52], y in [0.98, 1.88], split by narrow center post at x = 0
-    const frontGlassOuter = roundedRect(vec2(p.z.sub(1.74), p.y.sub(1.42)), vec2(0.76, 0.42), 0.14)
-      .mul(step(0.65, p.z));
-    const centerPost = smoothstep(0.022, 0.036, abs(p.x));
-    const aPillar = smoothstep(0.028, 0.044, abs(p.z.sub(1.06)));
-    const bPillar = smoothstep(0.026, 0.042, abs(p.z.sub(0.08)));
-
-    // Lower nose chin bubble windows (for pilot downward visibility)
-    const chinWindow = roundedRect(vec2(abs(p.x).sub(0.28), p.y.sub(0.84)), vec2(0.19, 0.11), 0.04)
-      .mul(smoothstep(1.95, 2.15, p.z))
-      .mul(smoothstep(2.68, 2.52, p.z));
-
-    // Wide panoramic passenger sightseeing side windows: z in [-0.78, 1.02], y in [1.02, 1.74]
-    const sideWindow = roundedRect(vec2(p.z.sub(0.12), p.y.sub(1.38)), vec2(0.88, 0.34), 0.10)
-      .mul(step(0.45, abs(n.x)));
-
-    // Overhead cockpit eyebrow skylight windows
-    const skylight = roundedRect(vec2(abs(p.x).sub(0.32), p.z.sub(1.25)), vec2(0.20, 0.38), 0.06)
-      .mul(step(1.72, p.y));
-
-    const rawWindowMask = max(
-      max(frontGlassOuter.mul(centerPost), sideWindow),
-      max(chinWindow, skylight)
-    )
-      .mul(aPillar)
-      .mul(bPillar)
-      .mul(isFuselage)
-      .toVar();
-
     // Rubber window weatherstripping seal around glass panes
     const rawSealMask = max(
       roundedRect(vec2(p.z.sub(1.74), p.y.sub(1.42)), vec2(0.80, 0.46), 0.15).mul(step(0.60, p.z)),
@@ -2004,30 +1998,8 @@ function createLoftedHelicopterMaterial() {
 
   mat.colorNode = evaluateHeliSurface();
 
-  mat.roughnessNode = Fn(() => {
-    const partId = attribute('partId', 'float');
-    const isFuselage = step(abs(partId.sub(HELI_PARTS.FUSELAGE)), 0.25);
-    const isSkid = step(abs(partId.sub(HELI_PARTS.SKID)), 0.25);
-    const isRotor = step(abs(partId.sub(HELI_PARTS.ROTOR)), 0.25);
-    const p = attribute('position', 'vec3');
-    const n = attribute('normal', 'vec3');
-    const frontGlass = roundedRect(vec2(p.z.sub(1.74), p.y.sub(1.42)), vec2(0.76, 0.42), 0.14).mul(step(0.65, p.z));
-    const sideGlass = roundedRect(vec2(p.z.sub(0.12), p.y.sub(1.38)), vec2(0.88, 0.34), 0.10).mul(step(0.45, abs(n.x)));
-    const isGlass = max(frontGlass, sideGlass).mul(isFuselage);
-    return mix(mix(float(0.20), float(0.05), isGlass), float(0.55), max(isSkid, isRotor));
-  })();
-
-  mat.metalnessNode = Fn(() => {
-    const partId = attribute('partId', 'float');
-    const isFuselage = step(abs(partId.sub(HELI_PARTS.FUSELAGE)), 0.25);
-    const isExhaust = step(abs(partId.sub(HELI_PARTS.EXHAUST)), 0.25);
-    const p = attribute('position', 'vec3');
-    const n = attribute('normal', 'vec3');
-    const frontGlass = roundedRect(vec2(p.z.sub(1.74), p.y.sub(1.42)), vec2(0.76, 0.42), 0.14).mul(step(0.65, p.z));
-    const sideGlass = roundedRect(vec2(p.z.sub(0.12), p.y.sub(1.38)), vec2(0.88, 0.34), 0.10).mul(step(0.45, abs(n.x)));
-    const isGlass = max(frontGlass, sideGlass).mul(isFuselage);
-    return mix(mix(float(0.35), float(0.88), isGlass), float(0.82), isExhaust);
-  })();
+  mat.roughnessNode = mix(mix(float(0.20), float(0.05), rawWindowMask), float(0.55), max(isSkid, isRotor));
+  mat.metalnessNode = mix(mix(float(0.35), float(0.88), rawWindowMask), float(0.82), isExhaust);
 
   _heliLoftedMat = mat;
   return mat;

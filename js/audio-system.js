@@ -48,18 +48,9 @@ class SpatialEmitter {
   update(source, listener, now, range = 160, snap = false, immediate = false) {
     const y = source.y + this.height;
     const distance = Math.hypot(source.x - listener.x, y - listener.y, source.z - listener.z);
-    if (snap) {
-      this.panner.positionX.cancelScheduledValues(now);
-      this.panner.positionY.cancelScheduledValues(now);
-      this.panner.positionZ.cancelScheduledValues(now);
-      this.panner.positionX.setValueAtTime(source.x, now);
-      this.panner.positionY.setValueAtTime(y, now);
-      this.panner.positionZ.setValueAtTime(source.z, now);
-    } else {
-      smooth(this.panner.positionX, source.x, now);
-      smooth(this.panner.positionY, y, now);
-      smooth(this.panner.positionZ, source.z, now);
-    }
+    smooth(this.panner.positionX, source.x, now, 0.035, snap);
+    smooth(this.panner.positionY, y, now, 0.035, snap);
+    smooth(this.panner.positionZ, source.z, now, 0.035, snap);
     if (this.panner.coneOuterAngle < 360 && Number.isFinite(source.heading)) {
       smooth(this.panner.orientationX, Math.sin(source.heading), now);
       smooth(this.panner.orientationZ, Math.cos(source.heading), now);
@@ -262,7 +253,6 @@ class CityAudioSystem {
     for (const slot of pool.values()) slot.selected = false;
     let count = 0;
     for (const source of candidates) {
-      if (siren && !source.police) continue;
       if (++count > limit) break;
       let slot = pool.get(source.id);
       if (!slot) {

@@ -823,10 +823,6 @@ body.hud-minimized .icon-show {
   transition: transform 0.45s var(--ease-out), width 0.45s var(--ease-out);
 }
 
-.mode-switch.no-anim .mode-indicator {
-  transition: none;
-}
-
 .mode-btn {
   position: relative;
   z-index: 1;

@@ -388,11 +388,25 @@ function buildBerlinCityGrid(scene) {
   return { group, sidewalks, footprints, highwayLanes: [], colliders };
 }
 
-// js/city-grid.js
-// Builds Manhattan Island's true polygonal coastline contour, granite seawall bulkhead,
-// full-island 3D raised sidewalks & curbstones (split by Broadway's diagonal corridor),
-// organic Central Park lakes & winding drives, Roosevelt & Governors Islands,
-// Hudson & East River piers, and East River suspension bridges at 60 FPS.
+function addStreetGround(poly, height) {
+  streetGroundSurfaces.push({
+    poly, height,
+    minX: Math.min(...poly.map((p) => p.x)), maxX: Math.max(...poly.map((p) => p.x)),
+    minZ: Math.min(...poly.map((p) => p.z)), maxZ: Math.max(...poly.map((p) => p.z))
+  });
+}
+
+function getStreetGroundHeight(x, z) {
+  let height = 0.22;
+  for (const s of streetGroundSurfaces) {
+    if (s.height > height && x >= s.minX && x <= s.maxX && z >= s.minZ && z <= s.maxZ
+      && pointInPolygonXZ(s.poly, x, z)) height = s.height;
+  }
+  return height;
+}
+
+// Manhattan's coastline, raised sidewalks, parks, waterfront piers and shore highways.
+// Boroughs, harbor islands and major river bridges are built in boroughs.js.
 
 /**
  * Builds a multi-part vaulted stone-arch park bridge (Gapstow Bridge & Bow Bridge)
@@ -484,7 +498,6 @@ function buildManhattanSchistGeometry() {
  * batched BufferGeometry per material to minimize WebGPU render & shadow pass draw calls.
  */
 function batchStaticGroupMeshes(rootGroup, excludeMaterials = null) {
-  if (!mergeGeometries) return;
   rootGroup.updateMatrixWorld(true);
   const invRoot = new THREE.Matrix4().copy(rootGroup.matrixWorld).invert();
   const buckets = new Map();
@@ -1798,6 +1811,7 @@ function buildWaterfrontPiers(group) {
 
 function buildCityGrid(scene) {
   if (BERLIN_DATA) return buildBerlinCityGrid(scene);
+  streetGroundSurfaces = [];
   const group = new THREE.Group();
   group.name = 'ManhattanCityGrid';
 
@@ -1825,11 +1839,6 @@ function buildCityGrid(scene) {
     color: 0x5c5a55,
     roughness: 0.82,
     metalness: 0.1
-  });
-  const esplanadeMat = new THREE.MeshStandardNodeMaterial({
-    color: 0x76726a,
-    roughness: 0.76,
-    metalness: 0.08
   });
 
   // Slightly expanded perimeter polygon for the granite seawall & waterfront esplanade coping
@@ -1890,7 +1899,10 @@ function buildCityGrid(scene) {
     // Planted malls down the middle of Park Ave, Broadway (Upper West Side), Allen St...: a clipped hedge on the slab
     if (b.median && Math.min(b.maxX - b.minX, b.maxZ - b.minZ) > 2.2) {
       const hedge = offsetPolygonInward(b.poly, 1.0);
-      if (hedge) hedgeGeos.push(createExtrudedPolygonMesh(hedge, SW_TOP, 0.55, medianHedgeMat).geometry);
+      if (hedge) {
+        hedgeGeos.push(createExtrudedPolygonMesh(hedge, SW_TOP, 0.55, medianHedgeMat).geometry);
+        addStreetGround(hedge, SW_TOP + 0.55);
+      }
     }
   }
   const mergeInto = (geos, mat, cast = false) => {
@@ -1941,9 +1953,11 @@ function buildCityGrid(scene) {
 
   function addPavedPlaza(pts, style, topY = PLAZA_Y) {
     group.add(createExtrudedPolygonMesh(pts, 0.0, topY - 0.04, curbMat, true, false));
-    const top = createExtrudedPolygonMesh(offsetConvexPolygon(pts, -0.3), 0.0, topY, pavingMat, true, false);
+    const topPoly = offsetConvexPolygon(pts, -0.3);
+    const top = createExtrudedPolygonMesh(topPoly, 0.0, topY, pavingMat, true, false);
     setPavingStyle(top.geometry, style);
     group.add(top);
+    addStreetGround(topPoly, topY);
     const xs = pts.map((p) => p.x);
     const zs = pts.map((p) => p.z);
     pavedRects.push({ minX: Math.min(...xs), maxX: Math.max(...xs), minZ: Math.min(...zs), maxZ: Math.max(...zs) });
@@ -2143,7 +2157,6 @@ function buildCityGrid(scene) {
     for (let i = 0; i < flat.length; i += 2) o.push({ x: flat[i], z: flat[i + 1] });
     return o;
   };
-  const cp = CENTRAL_PARK_BOUNDS;
   const cpSite = (name) => CPG.sites.find((t) => t.name === name);
 
   // Perimeter sidewalk: the park's curb island (BLOCKS), with the schist wall along the real park line inside it
@@ -2157,12 +2170,17 @@ function buildCityGrid(scene) {
   // Low coursed-schist perimeter wall (~0.8 m above the sidewalk) with the lawn a little inside it
   const cpWall = flatPts(CPG.outline);
   group.add(createExtrudedPolygonMesh(cpWall, 0.0, 1.05, createParkWallMaterial(), true, false));
+  addStreetGround(cpWall, 1.05);
   const cpLawnPts = offsetPolygonInward(cpWall, 0.6) || cpWall;
   group.add(createExtrudedPolygonMesh(cpLawnPts, 0.85, 0.34, cpLawnMat, true, false));
+  addStreetGround(cpLawnPts, 1.19);
 
   // Sunlit open meadows & lawns: Sheep Meadow, the Great Lawn, North Meadow, the Great Hill, Cedar & Pilgrim Hills...
   const cpLawnPolys = CPG.lawns.map((l) => flatPts(l.ring));
-  for (const pts of cpLawnPolys) group.add(createFlatPolygonMesh(pts, 1.21, cpMeadowMat, true));
+  for (const pts of cpLawnPolys) {
+    group.add(createFlatPolygonMesh(pts, 1.21, cpMeadowMat, true));
+    addStreetGround(pts, 1.21);
+  }
 
   // Water: the Lake, the Jacqueline Kennedy Onassis Reservoir (raised in its stone basin, ringed by the running
   // track), Harlem Meer, the Pond, Turtle Pond, the Pool & Conservatory Water
@@ -2412,7 +2430,9 @@ function buildCityGrid(scene) {
       if (poly.length < 3 || Math.abs(polygonArea(poly)) < 30) continue;
       const bed = poly.map((p) => ({ x: p.x + hx, z: p.z + hz }));
       group.add(createExtrudedPolygonMesh(bed, 0.2, BED_Y - 0.21, graniteMat, true, false));
-      parkLawnGeos.push(createExtrudedPolygonMesh(offsetConvexPolygon(bed, -0.3), 0.3, BED_Y - 0.3, cpLawnMat).geometry);
+      const lawn = offsetConvexPolygon(bed, -0.3);
+      parkLawnGeos.push(createExtrudedPolygonMesh(lawn, 0.3, BED_Y - 0.3, cpLawnMat).geometry);
+      addStreetGround(lawn, BED_Y);
       const hoop = offsetConvexPolygon(bed, -0.18);
       parkFenceGeos.push(buildFenceStripGeometry(hoop.map((p, k) => {
         const q = hoop[(k + 1) % hoop.length];
@@ -2609,13 +2629,17 @@ function buildCityGrid(scene) {
     const top = createExtrudedPolygonMesh(slab, 0.0, PARK_Y, pavingMat, true, false);
     setPavingStyle(top.geometry, 0);
     group.add(top);
+    addStreetGround(slab, PARK_Y);
     pavedRects.push({ minX: b.minX, maxX: b.maxX, minZ: b.minZ, maxZ: b.maxZ });
     addFootprint((b.minX + b.maxX) * 0.5, (b.minZ + b.maxZ) * 0.5, b.maxX - b.minX, b.maxZ - b.minZ);
     const bed = offsetPolygonInward(b.poly, Math.min(5, Math.min(b.maxX - b.minX, b.maxZ - b.minZ) * 0.2));
     if (!bed) continue;
     group.add(createExtrudedPolygonMesh(bed, 0.2, BED_Y - 0.21, graniteMat, true, false));
     const lawnTop = offsetPolygonInward(bed, 0.3);
-    if (lawnTop) parkLawnGeos.push(createExtrudedPolygonMesh(lawnTop, 0.3, BED_Y - 0.3, cpLawnMat).geometry);
+    if (lawnTop) {
+      parkLawnGeos.push(createExtrudedPolygonMesh(lawnTop, 0.3, BED_Y - 0.3, cpLawnMat).geometry);
+      addStreetGround(lawnTop, BED_Y);
+    }
     // trees on a jittered grid inside the bed
     const SP = 11;
     for (let gx = b.minX + SP * 0.5; gx < b.maxX; gx += SP) {
@@ -3859,6 +3883,7 @@ function buildUnderpassPortal(frames, acc, quad, lights, colliders) {
 
 export {
   buildCityGrid,
+  getStreetGroundHeight,
   batchStaticGroupMeshes,
   centralParkClearings,
   parkTreeSites,

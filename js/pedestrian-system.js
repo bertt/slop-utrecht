@@ -51,6 +51,8 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
       coord: 0,
       line: 0, // its line over the crosswalk, off the centre line
       waiting: false,
+      walkDelay: 0.2 + hash(i, 8) * 1.3,
+      walkAt: -1,
       speed: 1.22 + (i % 5) * 0.1 + hash(i, 3) * 0.08, // preferred walking speed
       v: 0, // current speed, easing up to it and down to stops
       pause: 0,
@@ -148,6 +150,8 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
       p.z = z;
       p.v = crosswalk ? 0 : p.speed;
       p.pause = 0;
+      p.waiting = false;
+      p.walkAt = -1;
       p.avoidUntil = 0;
       p.resumeDir = 0;
       p.dodge = p.dodgeTarget = 0;
@@ -183,7 +187,7 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
   function escapeRoom(p, dir) {
     let room = dir > 0 ? p.len - p.t : p.t;
     const s = dir > 0 ? p.t : p.len - p.t;
-    if (p.node && s <= KERB && !mayCross(p)) room = Math.min(room, KERB - s);
+    if (p.node && s <= KERB + 1e-6 && !mayCross(p)) room = Math.min(room, Math.max(0, KERB - s));
     for (const q of peds) {
       if (q === p || !q.placed) continue;
       const dx = q.x - p.x, dz = q.z - p.z;
@@ -242,6 +246,7 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
   }
 
   function turnPed(p, dir) {
+    p.walkAt = -1;
     p.dir = dir;
     p.v = 0;
     p.nextRoute = null;
@@ -288,7 +293,7 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
     const ahead = p.dir > 0 ? p.len - p.t : p.t;
     const dodging = p.dodge !== 0 || p.dodgeTarget !== 0;
     const normalSpeed = dodging || p.pause > 0 || p.conversation || p.waiting ? 0 : p.speed;
-    const normalRoom = p.node && curbProgress(p) <= KERB && !mayCross(p) ? KERB - curbProgress(p) : ahead;
+    const normalRoom = p.node && curbProgress(p) <= KERB + 1e-6 && !mayCross(p) ? Math.max(0, KERB - curbProgress(p)) : ahead;
     const avoiding = clock < p.avoidUntil;
     const escapeAhead = Math.max(0, Math.min(ahead, (p.avoidT - p.t) * p.dir));
     const contact = playerContactTime(p, p.dir * normalSpeed, normalRoom, false);
@@ -414,10 +419,18 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
         }
       }
     }
+    let canCross = true;
     if (p.node) {
       // room to walk before standing: up to the curb unless p may cross, and up to the back of whoever is ahead
       const s = curbProgress(p);
-      room = s <= KERB && !mayCross(p) ? KERB - s : Infinity;
+      if (s <= KERB + 1e-6) {
+        const walk = walkOn(p.side);
+        if (!walk) p.walkAt = -1;
+        else if (p.walkAt < 0) p.walkAt = clock + p.walkDelay;
+        // React to WALK independently of the queue or vehicles still clearing the crossing.
+        canCross = walk && (avoiding || clock >= p.walkAt) && mayCross(p);
+      }
+      room = s <= KERB + 1e-6 && !canCross ? Math.max(0, KERB - s) : Infinity;
       for (const q of p.node.curb) {
         if (q === p || q.node !== p.node || q.side !== p.side || q.dir !== p.dir || Math.abs(q.line - p.line) > 0.55) continue;
         const gap = curbProgress(q) - s;
@@ -430,8 +443,8 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
     const movement = diving ? Math.min(Math.abs(p.diveT - p.t), PED_DODGE_SPEED * dt) : Math.min(p.v * dt, room);
     if (p.v * dt > room) p.v = 0;
     let t = p.t + p.dir * movement;
-    const reachesCurb = !!p.node && curbProgress(p) <= KERB && (p.dir > 0 ? t : p.len - t) >= KERB - 1e-6;
-    p.waiting = !diving && reachesCurb && !mayCross(p);
+    const reachesCurb = !!p.node && curbProgress(p) <= KERB + 1e-6 && (p.dir > 0 ? t : p.len - t) >= KERB - 1e-6;
+    p.waiting = !diving && reachesCurb && !canCross;
     if (p.waiting) {
       t = p.dir > 0 ? Math.min(t, KERB) : Math.max(t, p.len - KERB);
       p.v = 0;
@@ -445,6 +458,7 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
         const leg = p.nextRoute[p.nextLeg++];
         Object.assign(p, leg.track);
         p.route = leg.track;
+        p.walkAt = -1;
         p.dir = leg.dir;
         t = p.dir > 0 ? 0 : p.len;
         p.t = t;
@@ -452,6 +466,7 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
         if (p.nextLeg === p.nextRoute.length) p.nextRoute = null;
       } else if (!avoiding) {
         p.dir = -p.dir;
+        p.walkAt = -1;
         p.v = 0;
         p.pause = TURN_TIME;
       }

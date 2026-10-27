@@ -45,6 +45,8 @@ import {
   normalize,
   reflect,
   pow,
+  log2,
+  exp2,
   sign,
   fwidth,
   texture,
@@ -63,15 +65,7 @@ import {
   waterAt
 } from './city-config.js';
 
-// js/tsl-materials.js
-// Photorealistic TSL (Three.js Shading Language) procedural shaders for Three.js r186 WebGPURenderer
-// Incorporating techniques from three.js webgpu_generator_city.html:
-// - Mikkelsen Surface-Gradient Hardware Derivative Bump Mapping (bumpNormal)
-// - Filter-Width Anti-Aliased Procedural Markings & Mortar (lineAA & gridLine via fwidth)
-// - True 3D Slab Ray-Marched Room & Retail Storefront Interiors (walls, ceiling lamps, floors, rugs, doors, art, shelves, curtains)
-// - Window Air-Conditioner Units with Louver Relief & Grimy Soda-Lime Window Glazing
-// - Crown-Sphere Foliage Normal Relief, Radial Interior Canopy AO & Cast-Iron Tree Grate Shading
-// - Occlusion-Aware Urban Canyon Global Illumination (aoNode + Warm Terracotta/Limestone Bounce)
+// Procedural city materials: facades and interiors, vegetation, roads, water and lighting effects.
 
 // Shared live uniforms controlled by lighting / time-of-day presets
 const cityUniforms = {
@@ -158,6 +152,27 @@ const filteredPulse = Fn(([x, a, b, w]) => {
   return integral(p.add(hw)).sub(integral(p.sub(hw))).div(hw.mul(2.0));
 });
 
+// Keep distant lit windows in 1–2 pixel clusters. Adjacent world-anchored scales cross-fade, and
+// the half-width inset leaves room for filtering at cell edges while preserving mean brightness.
+const distantWindowLight = Fn(([grid, fw, probability, seed, lod]) => {
+  const light = float(probability).toVar();
+  If(cityUniforms.uInteriorGlow.greaterThan(0.5).and(lod.greaterThan(0.0)), () => {
+    const level = log2(max(max(fw.x, fw.y).mul(4.0), 2.0)).toVar();
+    const scale = exp2(floor(level)).toVar();
+    const cluster = (size) => {
+      const p = grid.div(size).toVar();
+      const width = fw.div(size).toVar();
+      const lit = step(float(1.0).sub(probability), hash2D(floor(p).add(vec2(seed, 73.1))));
+      const coverage = filteredPulse(fract(p.x), 0.25, 0.75, width.x)
+        .mul(filteredPulse(fract(p.y), 0.25, 0.75, width.y));
+      return lit.mul(coverage).mul(4.0);
+    };
+    const clustered = mix(cluster(scale), cluster(scale.mul(2.0)), smoothstep(0.0, 1.0, fract(level)));
+    light.assign(mix(probability, clustered, smoothstep(0.5, 1.2, cityUniforms.uInteriorGlow)));
+  });
+  return light;
+});
+
 /**
  * Occlusion-Aware Urban Canyon Sky Visibility (aoNode)
  * Models how Manhattan street canyons occlude overhead sky irradiance near the street floor (y = 0..65m),
@@ -199,8 +214,8 @@ const facadeAlongZ = varying(
  *   set back behind the facade so neighbouring windows look into the same full-sized room.
  * - Includes left & right fabric drapes hung just inside the window frame (`winUV`) from a 6-swatch
  *   domestic palette that block interior glow (`emit = 0.20`) so drapes silhouette against lit rooms.
- * - Once windows shrink to a pixel or two (`fwNode`: pixel footprint in cells) rooms glow at the mean lit level (with
- *   a lit room's tint), drapes at their mean coverage & lamps fade out, so distant towers don't twinkle in motion.
+ * - Once windows shrink to a pixel or two (`fwNode`: pixel footprint in cells), lit rooms merge into filtered
+ *   clusters, drapes settle to their mean coverage & lamps fade out, so distant towers don't twinkle in motion.
  * - Returns `vec4(roomColor, litEmit)`.
  */
 const evaluateApartmentInterior = Fn(([uCoord, vCoord, winUV, cellId, winWNode, floorHNode, seedNode, warmthNode, litProbNode, fwNode]) => {
@@ -356,7 +371,8 @@ const evaluateApartmentInterior = Fn(([uCoord, vCoord, winUV, cellId, winWNode, 
   const roomWarmth = mix(vec3(1.0), lightCol, lit.mul(0.85));
   const finalRoomCol = bestCol.mul(roomWarmth).mul(mix(float(0.85), float(1.35), lit));
 
-  return vec4(finalRoomCol, mix(litRoom, litProbNode, lod).mul(bestEmit));
+  const distantLit = distantWindowLight(vec2(gridU, v.div(fH)), fwNode, litProbNode, seedNode, lod);
+  return vec4(finalRoomCol, mix(litRoom, distantLit, lod).mul(bestEmit));
 });
 
 /**
@@ -1191,9 +1207,7 @@ function createChryslerCrownMaterial() {
   return mat;
 }
 
-/**
- * GTA 6-Style Metallic Clearcoat Vehicle Paint TSL Material
- */
+// Vehicle paint with Fresnel reflections and a sharp sun highlight.
 function createCarPaintMaterial(baseHex = 0xffc218) {
   if (_carPaintCache.has(baseHex)) return _carPaintCache.get(baseHex);
   const mat = new THREE.MeshStandardNodeMaterial({
@@ -1269,10 +1283,6 @@ const TREE_WIND = vec2(0.86, 0.51);
  * (shadows follow), branches bob and leaves flutter.
  */
 function createTreeMaterial(leafAtlas) {
-  // The alpha test is given as nodes (alphaTestNode on the scene pass, maskShadowNode in the shadow maps) rather than
-  // `alphaTest`: the shadow passes copy each caster's `alphaTest` onto one shared shadow material, and every switch
-  // between 0 and > 0 bumps its version, which made three.js re-hash the node graphs of all the casters' shadow render
-  // objects every frame (~10 ms of CPU). The trees were the only alpha-tested casters.
   const mat = new TreeNodeMaterial({
     side: THREE.DoubleSide,
     alphaToCoverage: true,
@@ -1311,8 +1321,7 @@ function createTreeMaterial(leafAtlas) {
 
   // Coverage: leaf cards from the atlas; bark is opaque from outside (its back faces are dropped)
   const alpha = mix(float(frontFacing), leaf.a, isLeaf);
-  mat.alphaTestNode = float(0.5);
-  mat.maskShadowNode = alpha.greaterThan(0.5);
+  mat.alphaTest = 0.5;
 
   mat.colorNode = Fn(() => {
     // Leaves: per-tree tint x atlas brightness, a share of sun-yellowed and of cooler leaves, brown twigs & stalks,

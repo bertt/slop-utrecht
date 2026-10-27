@@ -78,7 +78,6 @@ function resolveVehicleContact(a, b, contact) {
   let vx = a.vx + a.angularVel * az - b.vx - b.angularVel * bz;
   let vz = a.vz - a.angularVel * ax - b.vz + b.angularVel * bx;
   const closing = -(vx * nx + vz * nz);
-  contact.speed = Math.max(0, closing);
   contact.impulse = 0;
   if (closing <= 0 || inverseA + inverseB === 0) return 0;
 

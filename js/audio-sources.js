@@ -35,7 +35,7 @@ function roadLoad(speed, acceleration, maxAcceleration) {
   return unit(acceleration / maxAcceleration + unit(speed / 2) * (0.12 + 0.28 * unit(speed / 30) ** 2));
 }
 
-function writeMotor(item, id, kind, x, y, z, speed, load, heading, police, player, seed, blocked, gain, range, verticalSpeed = 0) {
+function writeMotor(item, id, kind, x, y, z, speed, load, heading, player, seed, blocked, gain, range, verticalSpeed = 0) {
   item.id = id;
   item.kind = kind;
   item.x = x;
@@ -45,7 +45,6 @@ function writeMotor(item, id, kind, x, y, z, speed, load, heading, police, playe
   item.load = unit(load);
   item.verticalSpeed = Number.isFinite(verticalSpeed) ? verticalSpeed : 0;
   item.heading = heading;
-  item.police = police;
   item.player = player;
   item.seed = seed;
   item.blocked = blocked;
@@ -113,13 +112,13 @@ class CityAudioSources {
     if (!Number.isFinite(d2)) return;
     if (police && d2 <= SIREN_RANGE * SIREN_RANGE) {
       const siren = this.sirens.take(d2);
-      if (siren) writeMotor(siren, id, 'siren', x, y, z, speed, load, heading, true, player, seed, blocked, 1, 200);
+      if (siren) writeMotor(siren, id, 'siren', x, y, z, speed, load, heading, player, seed, blocked, 1, 200);
     }
     const reach = kind === 'helicopter' ? range : MOTOR_RANGE;
     if (d2 > reach * reach) return;
     const item = this.motors.take(player ? -1 : d2);
     if (!item) return;
-    writeMotor(item, id, kind, x, y, z, speed, load, heading, police, player, seed, blocked, gain, range, verticalSpeed);
+    writeMotor(item, id, kind, x, y, z, speed, load, heading, player, seed, blocked, gain, range, verticalSpeed);
   }
 
   person(id, x, y, z, speed, grounded, rig, player = false, priority = player) {

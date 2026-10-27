@@ -127,17 +127,6 @@ function sidewalkAt(x,z){
   }
   return null;
 }
-/** Blocks whose bounds overlap a rectangle */
-function blocksInRect(minX, maxX, minZ, maxZ) {
-  const out = new Set();
-  for (let ix = Math.floor(minX / BLOCK_CELL); ix <= Math.floor(maxX / BLOCK_CELL); ix++) {
-    for (let iz = Math.floor(minZ / BLOCK_CELL); iz <= Math.floor(maxZ / BLOCK_CELL); iz++) {
-      const list = BLOCK_GRID.get(ix * 100000 + iz);
-      if (list) for (const b of list) if (b.maxX > minX && b.minX < maxX && b.maxZ > minZ && b.minZ < maxZ) out.add(b);
-    }
-  }
-  return [...out];
-}
 
 
 const WATER_POLYGONS=BERLIN_DATA.water.map(w=>{const poly=toPts(w.ring);return {...w,poly,inner:(w.holes||[]).map(toPts),minX:Math.min(...poly.map(p=>p.x)),maxX:Math.max(...poly.map(p=>p.x)),minZ:Math.min(...poly.map(p=>p.z)),maxZ:Math.max(...poly.map(p=>p.z))};});
@@ -247,7 +236,6 @@ export {
   ROOSEVELT_ISLAND_POLYGON,
   GOVERNORS_ISLAND_POLYGON,
   NJ_SHORELINE_POLYGON,
-  LONG_ISLAND_POLYGON,
   LONG_ISLAND_POLYGONS,
   BROOKLYN_POLYGONS,
   QUEENS_POLYGONS,
@@ -271,16 +259,13 @@ export {
   LANDMARK_SITES,
   TELEPORT_LOCATIONS,
   ISLAND_BOUNDS,
-  LANDMARK_BLOCKS,
   BLOCKS,
   CUT_Z,
   SIGNAL_TIMING,
   streetZ,
   avenueX,
-  avenueNameAt,
   districtAt,
   blockAt,
-  blocksInRect,
   nearestRoads,
   getBlockBounds,
   getLocationLabel,

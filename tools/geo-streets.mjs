@@ -3,8 +3,10 @@ import { cscl, segLines, toWorld, log } from './geo-base.mjs';
 
 // Every CSCL roadway piece as world-frame line segments with attributes
 const pieces = [];
+const plazaPieces = [];
 for (const s of cscl) {
-  if (!['1', '2', '3', '4', '9', '13'].includes(s.rw_type)) continue; // streets, highways, bridges, tunnels, ramps, U-turns
+  const plaza = s.rw_type === '6' && s.full_street_name === 'BROADWAY';
+  if (!plaza && !['1', '2', '3', '4', '9', '13'].includes(s.rw_type)) continue;
   const name = s.full_street_name || '';
   const w = parseFloat(s.streetwidth || '0') * 0.3048; // curb-to-curb roadway width (ft -> m)
   const lanes = parseInt(s.number_travel_lanes || '0', 10);
@@ -16,7 +18,7 @@ for (const s of cscl) {
       const L = Math.hypot(x1 - x0, z1 - z0);
       if (L < 0.5) continue;
       // trafdir: FT = travel from the first point to the last, TF = the reverse, TW = both ways
-      pieces.push({ name, rw: s.rw_type, w, lanes, dir: s.trafdir, x0, z0, x1, z1, L, level: s.from_level_code === s.to_level_code ? s.from_level_code : 'ramp' });
+      (plaza ? plazaPieces : pieces).push({ name, rw: s.rw_type, w, lanes, dir: s.trafdir, x0, z0, x1, z1, L, level: s.from_level_code === s.to_level_code ? s.from_level_code : 'ramp' });
     }
   }
 }
@@ -141,7 +143,7 @@ for (const [id, names, label] of AVENUE_LINES) {
   AVENUES.push({ id, label, x: Math.round(x * 10) / 10, segs });
 }
 
-export { pieces, STREETS, AVENUES, wmedian, unionIntervals };
+export { pieces, plazaPieces, STREETS, AVENUES, wmedian, unionIntervals };
 
 if (process.argv[1] && process.argv[1].endsWith('geo-streets.mjs')) {
   for (const s of STREETS) {

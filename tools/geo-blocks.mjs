@@ -2,7 +2,7 @@
 // its curb-to-curb width over the land (minus a waterfront strip), then labelling what's left.
 // Each block: curb outline polygon, axis-aligned lot rects inside its property line (curb minus sidewalk), metadata.
 import { geo, Raster, rdpRing, ringArea, bbox, log } from './geo-base.mjs';
-import { pieces } from './geo-streets.mjs';
+import { pieces, plazaPieces } from './geo-streets.mjs';
 
 export const CUT_Z = -7090; // detailed island south of here (≈ 129th St); Upper Manhattan beyond is low-detail
 export const STRIP = 20; // waterfront strip kept clear of blocks (esplanade + shore highway), metres in from the bulkhead
@@ -18,16 +18,17 @@ function roadWidth(p) {
   return 9.1;
 }
 const roads = [];
-for (const p of pieces) {
+const plazaRoads = [];
+for (const p of [...pieces, ...plazaPieces]) {
   if (p.level !== '13') continue; // at grade (from-level; ramps & viaducts drop out below)
   const atGradeStreet = p.rw === '1' && !PARK_ROADS.test(p.name) && !HIGHWAYS.test(p.name) && !/DRIVEWAY|PEDESTRIAN|ALLEY/.test(p.name);
   const surface9A = p.rw === '2' && /^(WEST ST|12 AVE|11 AVE)$/.test(p.name); // Route 9A at grade bounds the west side blocks
   const plaza = p.rw === '6' && p.name === 'BROADWAY'; // Broadway's pedestrian plazas (Times Sq, Herald Sq...)
   if (!atGradeStreet && !surface9A && !plaza) continue;
-  roads.push({ x0: p.x0, z0: p.z0, x1: p.x1, z1: p.z1, r: roadWidth(p) / 2, name: p.name });
+  (plaza ? plazaRoads : roads).push({ x0: p.x0, z0: p.z0, x1: p.x1, z1: p.z1, r: roadWidth(p) / 2, name: p.name });
 }
-// Broadway's pedestrian plazas aren't in the centerline (Times Square 42nd-47th St, Herald & Greeley Squares
-// 33rd-35th St): bridge each gap with a straight piece between the Broadway ends on either side
+// Straight strips used by the rendered Times Square and Herald Square plazas. Keep them clear
+// alongside the actual pedestrian centreline pieces used only for block boundaries.
 export const PLAZAS = [];
 {
   const bw = roads.filter((s) => s.name === 'BROADWAY');
@@ -69,8 +70,8 @@ const Z0 = CUT_Z, Z1 = Math.ceil(mb.z1) + 4;
 const R = new Raster(X0, Z0, X1, Z1, RES);
 R.fillRing(innerRing, 1);
 const W = R.w, H = R.h, D = R.d;
-// Stamp each roadway as a capsule
-for (const s of roads) {
+// Stamp each roadway and pedestrian plaza as a capsule
+for (const s of [...roads, ...plazaRoads]) {
   const ix0 = Math.max(0, Math.floor((Math.min(s.x0, s.x1) - s.r - R.x0) / RES));
   const ix1 = Math.min(W - 1, Math.ceil((Math.max(s.x0, s.x1) + s.r - R.x0) / RES));
   const iz0 = Math.max(0, Math.floor((Math.min(s.z0, s.z1) - s.r - R.z0) / RES));
@@ -246,7 +247,7 @@ function maskRects(m, w, h, maxRects = 8, minSide = 8) {
     for (let j = bj0; j <= bj1; j++) for (let i = bi0; i <= bi1; i++) m[j * w + i] = 0;
     if (covered > total * 0.93) break;
   }
-  return { rects, total, covered };
+  return rects;
 }
 function lotRects(c, maxRects = 8) {
   const w = c.i1 - c.i0 + 1, h = c.j1 - c.j0 + 1;
@@ -255,12 +256,8 @@ function lotRects(c, maxRects = 8) {
     const k = (c.j0 + j) * W + c.i0 + i;
     if (prop[k] && lab[k] === c.id) m[j * w + i] = 1;
   }
-  const { rects, total, covered } = maskRects(m, w, h, maxRects);
-  return {
-    rects: rects.map(([i0, i1, j0, j1]) => [R.x0 + (c.i0 + i0) * RES, R.x0 + (c.i0 + i1 + 1) * RES, R.z0 + (c.j0 + j0) * RES, R.z0 + (c.j0 + j1 + 1) * RES]),
-    propArea: total,
-    covered
-  };
+  const rects = maskRects(m, w, h, maxRects);
+  return rects.map(([i0, i1, j0, j1]) => [R.x0 + (c.i0 + i0) * RES, R.x0 + (c.i0 + i1 + 1) * RES, R.z0 + (c.j0 + j0) * RES, R.z0 + (c.j0 + j1 + 1) * RES]);
 }
 
 // --- Frontage frames of irregular islands (Lower Manhattan, Broadway's diagonals...) ---------------------------------
@@ -398,7 +395,7 @@ function blockFrames(c, poly) {
       const { lw, lh, prop, reg, cell } = vw;
       const m = new Uint8Array(lw * lh);
       for (let k = 0; k < lw * lh; k++) m[k] = prop[k] && (pass === 2 || reg[k]) && cell[k] >= 0 && !used[cell[k]] ? 1 : 0;
-      const { rects } = maskRects(m, lw, lh, pass === 1 ? 6 : 4, 12);
+      const rects = maskRects(m, lw, lh, pass === 1 ? 6 : 4, 12);
       for (const [i0, i1, j0, j1] of rects) {
         for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) if (cell[j * lw + i] >= 0) markUsed(cell[j * lw + i]);
         vw.rects.push([vw.u0 + i0, vw.u0 + i1 + 1, vw.v0 + j0, vw.v0 + j1 + 1]);
@@ -421,17 +418,14 @@ for (const c of comps) {
   if (ringArea(poly) > 0) poly.reverse();
   const bw = (c.i1 - c.i0 + 1) * RES, bd = (c.j1 - c.j0 + 1) * RES;
   const rectness = area / (bw * bd);
-  const { rects, propArea, covered } = area >= 300 ? lotRects(c) : { rects: [], propArea: 0, covered: 0 };
+  const rects = area >= 300 ? lotRects(c) : [];
   const frames = rectness <= 0.985 && area >= 300 ? blockFrames(c, poly) : null;
   blocks.push({
-    id: blocks.length,
     poly,
     area: Math.round(area),
-    bbox: [R.x0 + c.i0 * RES, R.x0 + (c.i1 + 1) * RES, R.z0 + c.j0 * RES, R.z0 + (c.j1 + 1) * RES],
     rect: rectness > 0.985,
     rects,
-    frames,
-    fill: propArea ? Math.round((covered / propArea) * 100) / 100 : 0
+    frames
   });
 }
 log(`${blocks.length} blocks (${blocks.filter((b) => b.rect).length} rectangular, ${blocks.filter((b) => !b.rects.length).length} without lots); ${small} specks dropped`);

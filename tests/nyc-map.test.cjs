@@ -77,10 +77,11 @@ function mapHarness() {
   const controls = eventTarget();
   const wrapper = { classList: classList() };
   const zoomIn = eventTarget(), zoomOut = eventTarget();
+  const hoverInfo = { textContent: '' };
   const elements = {
     'fullmap-canvas': canvas, 'fullmap-canvas-wrap': wrapper,
     'fullmap-modal': { classList: classList() },
-    'map-zoom-in': zoomIn, 'map-zoom-out': zoomOut
+    'map-zoom-in': zoomIn, 'map-zoom-out': zoomOut, 'fullmap-hover-info': hoverInfo
   };
   const document = {
     ...eventTarget(), hidden: false,
@@ -116,7 +117,7 @@ function mapHarness() {
   map.viewZoom = 1;
   map.toggleFullMap(true);
   return {
-    map, canvas, controls, wrapper, window, document, captured, teleports, toggles, zoomIn, zoomOut,
+    map, canvas, controls, wrapper, window, document, captured, teleports, toggles, zoomIn, zoomOut, hoverInfo,
     pointer(target, type, id, x = 110, y = 120, pointerType = 'touch', button = 0) {
       const event = { pointerId: id, clientX: x, clientY: y, pointerType, button, preventDefault() {} };
       (captured.has(id) ? canvas : target).dispatch(type, event);
@@ -195,10 +196,9 @@ test('a pointer released outside the map or far from its start does not teleport
 test('mouse hover and zoom buttons remain available without a pan', () => {
   const h = mapHarness();
   h.pointer(h.canvas, 'pointermove', 1, 120, 130, 'mouse');
-  assert.equal(h.map.hoverWorld.x, 1010);
-  assert.equal(h.map.hoverWorld.z, 2010);
+  assert.equal(h.hoverInfo.textContent, '1010, 2010 · Click to teleport here');
   h.pointer(h.canvas, 'pointermove', 2, 180, 130);
-  assert.equal(h.map.hoverWorld.x, 1010, 'untracked touch does not update hover');
+  assert.equal(h.hoverInfo.textContent, '1010, 2010 · Click to teleport here', 'untracked touch does not update hover');
   h.zoomIn.dispatch('click');
   assert.equal(h.map.viewZoom, 1.45);
   h.zoomOut.dispatch('click');

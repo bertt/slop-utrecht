@@ -45,19 +45,11 @@ import {
 import { GEO } from './nyc-geodata.js';
 import { fdrViaduct, pavedPlazaRects, parkTreeSites, sidewalkBlocks } from './city-grid.js';
 import { berlinPoints, berlinBounds, berlinPolygonGeometry, nearestBerlinRoad, berlinSpatialGroups, berlinGeometryGroups } from './berlin-geometry.js';
+import { createShopSigns } from './shop-signs.js';
 import { LANDMARK_EXCLUSIONS, LANDMARK_SOURCE_EXCLUSIONS } from './landmarks.js';
 
-// js/buildings.js
-// Generates dense, architecturally varied Manhattan city blocks across the entire island
-// indexed by a spatial 2D quadtree that dynamically streams high-detail
-// architectural elements (carved stone cornices/ledges, rooftop cedar water towers, mechanical
-// penthouses, wrought-iron fire escapes, retail awnings, illuminated storefront signs, and
-// sidewalk scaffolding sheds) around the player anywhere in Manhattan.
-//
-// Blocks are divided into lots the way Manhattan's are: apartment houses on the avenue corners, rows of
-// brownstones / tenements along the side streets around a "donut" of rear yards, lofts and office buildings sharing
-// party walls, towers rising from full-lot podiums. Footprints are rectilinear plans (light courts, U / E / H / ring
-// courtyards, dumbbell tenements, notched, stepped & cruciform towers) built as unions of non-overlapping boxes.
+// Building massing follows each block's lots and frontage frames. Footprints combine non-overlapping boxes.
+// A spatial quadtree streams cornices, rooftop equipment, fire escapes and storefront details around the player.
 
 function mulberry32(seed) {
   let a = seed >>> 0;
@@ -1421,28 +1413,6 @@ function buildCityBlocks(scene, { bag = false } = {}) {
     }
   }
 
-  // Low-rise waterfront blocks: warehouses, garages and small walk-ups (keeps the East River skyline view open)
-  function lowriseBlock(blk, cfg, x0, x1) {
-    const { minZ, maxZ } = blk;
-    const halfD = (maxZ - minZ) * 0.5;
-    let x = x0;
-    while (x1 - x > 0.5) {
-      let w = range(10, 26);
-      if (x1 - x - w < 8) w = x1 - x;
-      const lots = chance(0.6)
-        ? [rect(x, x + w, minZ, maxZ)]
-        : [rect(x, x + w, minZ, minZ + halfD), rect(x, x + w, maxZ - halfD, maxZ)];
-      for (const lot of lots) {
-        const mat = pickW([[1, 4], [0, 3], [3, 1]]);
-        const f = irange(cfg.floors[0], cfg.floors[1]);
-        const b = building(blk, mat, lot);
-        mass(b, [lot], 0, f);
-        commit(blk, b, { cornice: mat <= 2 && chance(0.6), corniceH: 0.6, roof: f >= 5 ? 'walkup' : 'none', wtP: 0.3 });
-      }
-      x += w;
-    }
-  }
-
   // East River lots between 1st Ave and the FDR Drive (23rd–58th St), too narrow for regular lots: a 2-4 storey podium
   // with a slab rising from it, as tall as the lot is wide allows (Kips Bay & NYU Langone hospital slabs, glass towers
   // on the old Con Ed site at 35th–41st St, Beekman & Sutton Place apartment towers). On the 42nd–45th St superblock
@@ -1504,7 +1474,6 @@ function buildCityBlocks(scene, { bag = false } = {}) {
     loft: loftBlock,
     office: officeBlock,
     projects: projectsBlock,
-    lowrise: lowriseBlock,
     river: riverfrontBlock
   };
 
@@ -1740,7 +1709,6 @@ function buildCityBlocks(scene, { bag = false } = {}) {
 
   const PROJECTS = { kind: 'projects', floors: [12, 20], mats: [[1, 8], [0, 2]] };
   const PROJECTS_STUY_TOWN = { ...PROJECTS, floors: [12, 14], mats: [[1, 1]] };
-  const LOWRISE = { kind: 'lowrise', floors: [2, 7] };
   const RIVERFRONT = { kind: 'river' };
 
   const CPB = CENTRAL_PARK_BOUNDS;
@@ -1811,7 +1779,7 @@ function buildCityBlocks(scene, { bag = false } = {}) {
    * architectural features (stone cornices, water towers, rooftop bulkheads, fire escapes, awnings, storefront
    * fascia signs, and scaffolding sheds) into the Quadtree.
    */
-  function populateBlock(minX, maxX, minZ, maxZ, colIndex, rowIndex, isOuter = false, lowRiseEsplanade = false, district = 'midtown') {
+  function populateBlock(minX, maxX, minZ, maxZ, district = 'midtown') {
     const bw = maxX - minX;
     const bd = maxZ - minZ;
     if (bw < (district === 'riverfront' ? 9 : minLot) || bd < minLot) return;
@@ -1846,7 +1814,7 @@ function buildCityBlocks(scene, { bag = false } = {}) {
     // Times Square's billboards hang on the walls of the lots fronting the bowtie (section B7), so a sheer wall rises
     // flush there
     const flush = { w: false, e: false };
-    if (TS && !isOuter && (xf || (maxZ > TS.zN && minZ < TS.zS))) {
+    if (TS && (xf || (maxZ > TS.zN && minZ < TS.zS))) {
       const za = xf ? minZ : Math.max(minZ, TS.zN);
       const zb = xf ? maxZ : Math.min(maxZ, TS.zS);
       flush.w = frontsBowtie(minX, -1, za, zb);
@@ -1864,7 +1832,7 @@ function buildCityBlocks(scene, { bag = false } = {}) {
       else x1 -= w;
     }
     if (x1 - x0 > 0.5) {
-      const profile = lowRiseEsplanade ? LOWRISE : blockProfile(blockDetail, district);
+      const profile = blockProfile(blockDetail, district);
       LAYOUTS[profile.kind](blockDetail, profile, x0, x1);
     }
     openOntoVoidLots(blockDetail);
@@ -2124,7 +2092,7 @@ function buildCityBlocks(scene, { bag = false } = {}) {
         for (const part of minusReserves(r)) {
           for (const [x0, x1, z0, z1] of splitDeep(part)) {
             if (x1 - x0 < minLot || z1 - z0 < minLot) continue;
-            populateBlock(x0, x1, z0, z1, 0, 0, false, false, b.district);
+            populateBlock(x0, x1, z0, z1, b.district);
           }
         }
       }
@@ -2432,39 +2400,6 @@ function buildCityBlocks(scene, { bag = false } = {}) {
   }
   group.add(awningInst);
 
-  const signThemes = [
-    { bg: '#161210', border: '#c89d54', text: 'KAWIARNIA · KAWA I CIASTA', color: '#ffe4a8' },
-    { bg: '#0c2244', border: '#38b6ff', text: 'APOTHEEK · UTRECHT', color: '#ffffff' },
-    { bg: '#142b20', border: '#d4af37', text: 'KSIĘGARNIA · KSIĄŻKI I KAWA', color: '#fff2cc' },
-    { bg: '#280a10', border: '#ff5252', text: 'SKLEP NOCNY · NAPOJE', color: '#ffd180' },
-    { bg: '#101318', border: '#e0e6ed', text: 'PIEKARNIA · ŚWIEŻE PIECZYWO', color: '#f5f9ff' }
-  ];
-  const MAX_SIGNS_PER_THEME = Math.ceil(MAX_AWNINGS / signThemes.length) + 32;
-  const signInsts = signThemes.map((st) => {
-    const c = document.createElement('canvas');
-    c.width = 512;
-    c.height = 96;
-    const ctx = c.getContext('2d');
-    ctx.fillStyle = st.bg;
-    ctx.fillRect(0, 0, 512, 96);
-    ctx.strokeStyle = st.border;
-    ctx.lineWidth = 6;
-    ctx.strokeRect(6, 6, 500, 84);
-    ctx.fillStyle = st.color;
-    ctx.font = '800 26px Inter, Arial, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(st.text, 256, 50);
-
-    const tex = new THREE.CanvasTexture(c);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    const sMat = new THREE.MeshBasicNodeMaterial({ map: tex });
-    const sInst = new THREE.InstancedMesh(unitBox, sMat, MAX_SIGNS_PER_THEME);
-    sInst.frustumCulled = false;
-    group.add(sInst);
-    return sInst;
-  });
-
   // 6. Sidewalk construction scaffolding sheds
   const shedMat = new THREE.MeshStandardNodeMaterial({ color: 0x214f37, roughness: 0.6, metalness: 0.25 });
   const shedInst = new THREE.InstancedMesh(unitBox, shedMat, MAX_SHEDS);
@@ -2478,14 +2413,15 @@ function buildCityBlocks(scene, { bag = false } = {}) {
   scene.add(storeLightGroup);
 
   const storeThemeColors = [
-    new THREE.Color(0xffd896), // Bistro warm gold
-    new THREE.Color(0xd8eeff), // Pharmacy crisp cool white
-    new THREE.Color(0xffe4ad), // Bookstore warm amber
-    new THREE.Color(0xffbe88), // 24hr Deli warm orange-gold
-    new THREE.Color(0xfff2d6)  // Watch boutique warm ivory
+    new THREE.Color(0xffd896),
+    new THREE.Color(0xd8eeff),
+    new THREE.Color(0xffe4ad),
+    new THREE.Color(0xffbe88),
+    new THREE.Color(0xfff2d6)
   ];
 
   const STORE_SPOT_POOL = 28;
+  const STORE_SPOT_INTENSITY = 46 * ((0.85 - 0.15) / 0.90);
   const storeSpotPool = [];
   for (let i = 0; i < STORE_SPOT_POOL; i++) {
     const spot = new THREE.SpotLight(0xffd896, 0, 12.0, 0.84, 0.80, 1.30);
@@ -2540,7 +2476,6 @@ function buildCityBlocks(scene, { bag = false } = {}) {
     fireEscapeSystem.begin();
     let awningCount = 0;
     let shedCount = 0;
-    const signCounts = signInsts.map(() => 0);
 
     for (let bIdx = 0; bIdx < nearbyBlocks.length; bIdx++) {
       const blk = nearbyBlocks[bIdx];
@@ -2601,15 +2536,8 @@ function buildCityBlocks(scene, { bag = false } = {}) {
         awningInst.setMatrixAt(awningCount, dummy.matrix);
         awningInst.setColorAt(awningCount, awningPalette[a.colorIdx % awningPalette.length]);
 
-        const themeIdx = awningCount % signInsts.length;
-        if (signCounts[themeIdx] < MAX_SIGNS_PER_THEME) {
-          dummy.position.set(a.x, 4.68, a.z);
-          dummy.scale.set(0.28, 0.86, a.d * 0.92);
-          dummy.updateMatrix();
-          signInsts[themeIdx].setMatrixAt(signCounts[themeIdx]++, dummy.matrix);
-        }
         if (collectNearLights) {
-          activeAwnings.push({ a, themeIdx, ry: a.ry ?? blk.ry ?? 0 });
+          activeAwnings.push({ a, themeIdx: a.colorIdx % storeThemeColors.length, ry: a.ry ?? blk.ry ?? 0 });
         }
         awningCount++;
       }
@@ -2644,11 +2572,6 @@ function buildCityBlocks(scene, { bag = false } = {}) {
     flagRange(awningInst.instanceMatrix, awningCount);
     if (awningInst.instanceColor) flagRange(awningInst.instanceColor, awningCount);
 
-    signInsts.forEach((sInst, idx) => {
-      sInst.count = signCounts[idx];
-      flagRange(sInst.instanceMatrix, signCounts[idx]);
-    });
-
     shedInst.count = shedCount;
     flagRange(shedInst.instanceMatrix, shedCount);
   }
@@ -2659,9 +2582,7 @@ function buildCityBlocks(scene, { bag = false } = {}) {
   }
 
   function updateLights(camera) {
-    const glow = 0.85;
-    const glowFactor = Math.max(0, (glow - 0.15) / 0.90);
-    if (!camera || glowFactor <= 0.001) {
+    if (!camera) {
       for (let i = 0; i < STORE_SPOT_POOL; i++) {
         storeSpotPool[i].intensity = 0;
         storeSpotPool[i].position.set(0, -1000, 0);
@@ -2698,7 +2619,6 @@ function buildCityBlocks(scene, { bag = false } = {}) {
       ? Math.min(STORE_MAX_DIST, spotCandidates[STORE_SPOT_POOL].effDist)
       : STORE_MAX_DIST;
     const activeSpots = Math.min(STORE_SPOT_POOL, spotCandidates.length);
-    const spotIntensity = 46 * glowFactor;
     for (let i = 0; i < STORE_SPOT_POOL; i++) {
       const spot = storeSpotPool[i];
       if (i < activeSpots) {
@@ -2712,7 +2632,7 @@ function buildCityBlocks(scene, { bag = false } = {}) {
         spot.target.position.set(a.x + outX * 1.85, 0.0, a.z + outZ * 1.85);
         spot.target.updateMatrixWorld();
         spot.color.copy(storeThemeColors[themeIdx % storeThemeColors.length]);
-        spot.intensity = spotIntensity * fade;
+        spot.intensity = STORE_SPOT_INTENSITY * fade;
       } else {
         spot.intensity = 0;
         spot.position.set(0, -1000, 0);
@@ -2722,6 +2642,11 @@ function buildCityBlocks(scene, { bag = false } = {}) {
 
   // Initial Quadtree stream centered at Midtown 5th Ave & 42nd St
   update(0, 62, true);
+
+  if (BERLIN_DATA) {
+    const shopSigns = createShopSigns(BERLIN_DATA.buildings || []);
+    if (shopSigns) group.add(shopSigns);
+  }
 
   scene.add(group);
   return {

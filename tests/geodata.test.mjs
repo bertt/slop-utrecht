@@ -12,6 +12,7 @@ test('geodata builds with default paths in a checkout containing spaces and non-
   try {
     fs.mkdirSync(path.join(dir, 'tools'));
     fs.mkdirSync(path.join(dir, 'js'));
+    fs.copyFileSync(path.join(root, 'js/city-config.js'), path.join(dir, 'js/city-config.js'));
     for (const name of fs.readdirSync(path.join(root, 'tools'))) {
       if (name.endsWith('.mjs')) fs.copyFileSync(path.join(root, 'tools', name), path.join(dir, 'tools', name));
     }
@@ -26,6 +27,9 @@ test('geodata builds with default paths in a checkout containing spaces and non-
     const { GEO } = await import(pathToFileURL(path.join(dir, 'js/nyc-geodata.js')).href);
     assert.ok(GEO.roadGraph.links.length > 0);
     assert.ok(GEO.blocks.length > 0);
+    const { blockAt } = await import(pathToFileURL(path.join(dir, 'js/city-config.js')).href);
+    assert.equal(blockAt(-575, -225), null, 'Times Square pedestrian plaza remains clear');
+    assert.ok(blockAt(-565, -225), 'The neighboring building block remains intact');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

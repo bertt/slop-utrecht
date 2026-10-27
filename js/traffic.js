@@ -22,15 +22,8 @@ import {
 } from './actor-models.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
-// js/traffic.js
-// Manhattan traffic and pedestrians on the road graph road-network.js derives from the city as built:
-// - 200 cars (taxis, sedans, SUVs, NYPD cruisers) and 12 MTA buses keep to their lanes and follow the vehicle
-//   ahead (Intelligent Driver Model), change lanes to overtake or to reach a turn lane, turn into other streets,
-//   stop for the signals street-details.js shows, give way to oncoming traffic when turning left, to the avenue at
-//   unsignalized corners and to pedestrians on crosswalks, and never enter an intersection they can't clear.
-// - 340 pedestrians follow connected sidewalks, meet to talk, and cross signalized crosswalks on WALK.
-// - Fixed-size local populations replenish distant roads and sidewalks in every direction, protecting the near view.
-// - The player's vehicle or character pushes and is pushed by the traffic (SAT contact, impulses, sparks).
+// Cars and buses follow the road graph, obey signals, yield at crossings and react to collisions.
+// Vehicles replenish around the player; pedestrian-system.js manages the nearby walking population.
 
 const NUM_CARS = 200;
 const NUM_BUSES = 16;
@@ -206,7 +199,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     const car = createVehicle(false, isSUV ? 2.3 : 2.25, isSUV ? 0.92 : 0.86, isSUV ? 1.4 : 1.38, CAR_DRIVER, 10 + (i % 5) * 0.9);
     // paint as float32 values, so renderCar() can tell whether an instance slot's paint changes by comparing
     const paint = [Math.fround(col.r), Math.fround(col.g), Math.fround(col.b)];
-    Object.assign(car, { isTaxi, isPolice, isSUV, bodyType, paint });
+    Object.assign(car, { isPolice, isSUV, bodyType, paint });
     cars.push(car);
   }
 
@@ -279,7 +272,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
   );
 
   // =========================================================================
-  // 2. LOFTED MTA SELECT BUS SERVICE BLUE & WHITE CITY BUSES (32 BUSES)
+  // 2. CITY BUSES
   // =========================================================================
   const busBodyGeo = buildLoftedBusBodyGeometry();
   // Per-instance lamp state the bus material reads: brake lights, left (+x) & right (-x) turn signals (renderBus)
@@ -404,8 +397,6 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
   const POLICE_LIGHT_POOL_SIZE = 6;
   const MAX_LIGHT_DIST = 115;
   const MAX_LIGHT_DIST_SQ = MAX_LIGHT_DIST * MAX_LIGHT_DIST;
-  const DUAL_BEAM_DIST_SQ = 96 * 96;
-  const DUAL_BEAM_MAX_VEHICLES = 44;
 
   const trafficLightsGroup = new THREE.Group();
   trafficLightsGroup.name = 'TrafficClusteredLights';

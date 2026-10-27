@@ -353,16 +353,25 @@ test('releasing car steering settles smoothly and suspension leans outward', () 
   assert.ok(Math.abs(sim.car.steerAngle) < 0.001);
 });
 
-test('hard braking reduces steering grip without counting air resistance as tire force', () => {
-  const braking = carDynamicsHarness({ speed: 35 });
-  const coasting = carDynamicsHarness({ speed: 35 });
-  braking.controller.keys.backward = true;
-  for (const sim of [braking, coasting]) {
-    sim.controller.keys.left = true;
-    sim.advance(0.3);
+test('braking while turning initiates a slide that recovers on release', () => {
+  for (const speed of [15, 25]) {
+    for (const turn of ['left', 'right']) {
+      const braking = carDynamicsHarness({ speed });
+      const coasting = carDynamicsHarness({ speed });
+      braking.controller.keys.backward = true;
+      for (const sim of [braking, coasting]) {
+        sim.controller.keys[turn] = true;
+        sim.advance(0.75);
+      }
+      const slip = (car) => Math.atan2(Math.hypot(car.vx, car.vz), Math.abs(car.speed));
+      assert.ok(slip(braking.car) > slip(coasting.car) * 1.5, 'the handbrake lets the rear slide out');
+      assert.ok(Math.hypot(...carVelocity(braking.car)) < speed, 'the slide cannot add momentum');
+      braking.controller.keys.backward = false;
+      braking.controller.keys[turn] = false;
+      braking.advance(2);
+      assert.ok(Math.hypot(braking.car.vx, braking.car.vz) < 0.1, 'grip returns smoothly after releasing the brake');
+    }
   }
-  assert.ok(braking.car.angularVel > 0.01, 'some steering remains available under hard braking');
-  assert.ok(braking.car.angularVel < coasting.car.angularVel, 'braking consumes part of the tire grip budget');
 });
 
 test('sustained car turns produce bounded slip that recovers with countersteering', () => {
@@ -415,19 +424,22 @@ test('unpowered car steering and collision recovery never add translational ener
   }
 });
 
-test('car turning and impact recovery agree across 30, 60 and 120 Hz', () => {
-  const results = [30, 60, 120].map((hz) => {
+test('car turning, handbraking and impact recovery agree across display rates', () => {
+  const results = [30, 60, 120, 144].map((hz) => {
     const sim = carDynamicsHarness({ speed: 15, vx: 2, angularVel: 0.5 });
     sim.controller.keys.left = 0.6;
     sim.controller.keys.forward = 0.5;
     sim.advance(2, hz);
-    sim.controller.keys.left = false;
     sim.controller.keys.forward = false;
+    sim.controller.keys.backward = 0.8;
+    sim.advance(0.5, hz);
+    sim.controller.keys.backward = false;
+    sim.controller.keys.left = false;
     sim.advance(1, hz);
     return sim.car;
   });
-  for (const car of results.slice(0, 2)) {
-    const reference = results[2];
+  for (const car of results.slice(0, -1)) {
+    const reference = results.at(-1);
     assert.ok(Math.hypot(car.position.x - reference.position.x, car.position.z - reference.position.z) < 0.1, 'path differs by less than ten centimetres');
     assert.ok(Math.abs(car.heading - reference.heading) < 0.01);
     assert.ok(Math.abs(car.speed - reference.speed) < 0.05);

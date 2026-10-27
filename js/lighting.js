@@ -22,16 +22,11 @@ import { SunLight } from 'three/addons/lights/SunLight.js';
 import { SunLightNode } from 'three/addons/lights/SunLightNode.js';
 import { cityUniforms } from './tsl-materials.js';
 
-// js/lighting.js
-// Physically-Based Atmospheric Sky (Preetham SkyMesh + Beer-Powder Clouds),
-// Live PMREMGenerator IBL Cubemap, Three.js r186 SunLight (2-Cascade CSM),
-// and Occlusion-Aware Urban Canyon Global Illumination for Three.js r186 WebGPURenderer
+// Atmospheric sky, environment lighting, sunlight and time-of-day presets.
 
 const TIME_PRESETS = {
   golden: {
     id: 'golden',
-    name: 'Golden Hour · 17:45',
-    // Crisp Manhattan canyon sun slicing across avenues & intersections so buildings, cars, trees & pedestrians cast sharp shadows
     sunDir: new THREE.Vector3(-0.44, 0.58, -0.68).normalize(),
     sunColor: 0xffca92,
     sunIntensity: 5.8,
@@ -57,7 +52,6 @@ const TIME_PRESETS = {
   },
   midday: {
     id: 'midday',
-    name: 'Sunny Midday · 13:30',
     sunDir: new THREE.Vector3(-0.34, 0.82, -0.46).normalize(),
     sunColor: 0xfff5e8,
     sunIntensity: 6.6,
@@ -83,7 +77,6 @@ const TIME_PRESETS = {
   },
   twilight: {
     id: 'twilight',
-    name: 'Blue Hour · 19:15',
     sunDir: new THREE.Vector3(-0.52, 0.36, -0.77).normalize(),
     sunColor: 0xff9466,
     sunIntensity: 3.1,
@@ -109,7 +102,6 @@ const TIME_PRESETS = {
   },
   midnight: {
     id: 'midnight',
-    name: 'Manhattan Night · 23:00',
     sunDir: new THREE.Vector3(0.42, 0.68, -0.60).normalize(),
     sunColor: 0x8cb0e8,
     sunIntensity: 1.45,
@@ -138,10 +130,9 @@ const TIME_PRESETS = {
 class LightingSystem {
   constructor(scene, renderer = null) {
     this.scene = scene;
-    this.renderer = renderer;
     this.activePresetId = 'golden';
 
-    // Assign SunLight its node implementation for WebGPURenderer (Light.registerNode since r187; r186 used the library)
+    // Register SunLight with either supported Three.js light-node API.
     if (SunLight.registerNode) {
       SunLight.registerNode(SunLightNode);
     } else if (renderer && renderer.library) {
@@ -193,18 +184,16 @@ class LightingSystem {
 
     this.scene.add(this.sky);
 
-    // Reusable PMREMGenerator & offscreen envScene (mirrors webgpu_generator_city.html)
+    // Reuse the environment scene and PMREM generator when the lighting preset changes.
     this.pmremGenerator = renderer ? new THREE.PMREMGenerator(renderer) : null;
     this.envScene = new THREE.Scene();
     this.envRenderTarget = null;
 
-    // Three.js r186 SunLight with automatic 2-Cascade Shadow Map (SunLightShadow + SunShadowNode)
-    // Shines from its position vector toward the origin (no .target needed)
+    // Two-cascade sunlight points from its position toward the origin; no target object is needed.
     this.sunLight = new SunLight(0xffca92, 5.8);
     this.sunLight.position.copy(TIME_PRESETS.golden.sunDir);
     this.sunLight.castShadow = true;
-    // 3072x3072 per cascade = 6144x3072 2-cascade shadow atlas (an 8192x4096 one cost ~20% fps and caused hitches),
-    // 2048 where the device allows less. The near cascade spans ~0.35-80 m of the view at street level (see update)
+    // Two cascades share an atlas: use 3072px tiles when a 6144px texture fits, otherwise 2048px tiles.
     const maxTex = (renderer && renderer.backend && renderer.backend.device && renderer.backend.device.limits.maxTextureDimension2D) || 4096;
     const tile = maxTex >= 6144 ? 3072 : 2048;
     this.sunLight.shadow.mapSize.set(tile, tile);
@@ -300,9 +289,7 @@ class LightingSystem {
     cityUniforms.uSkySunDir.value.copy(p.sunDir);
     cityUniforms.uInteriorGlow.value = p.interiorGlow;
     cityUniforms.uRoadWetness.value = p.roadWetness;
-    if (cityUniforms.uCanyonBounce) {
-      cityUniforms.uCanyonBounce.value = p.canyonBounce;
-    }
+    cityUniforms.uCanyonBounce.value = p.canyonBounce;
 
     this.scene.environmentIntensity = p.envIntensity;
     this.bakeEnvironmentMap();
