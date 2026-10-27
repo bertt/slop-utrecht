@@ -3,7 +3,7 @@ import { bryantParkLawn } from './landmarks.js';
 
 // js/cameras.js
 // Multi-camera system supporting Third-Person Chase (with mouse/touch orbit + zoom),
-// Low-Angle Action Cam, POV/Cockpit Cam, 7 Berlin Architectural Cameras, and Auto-Director Drone.
+// Low-Angle Action Cam, POV/Cockpit Cam, 7 Utrecht Architectural Cameras, and Auto-Director Drone.
 
 const CAMERA_PRESETS = [
   { id: 'chase',       name: '3rd-Person Chase',         short: 'Chase',       category: 'follow', fov: 56 },

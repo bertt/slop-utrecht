@@ -61,7 +61,7 @@ import {
 import {
   CENTRAL_PARK_BOUNDS,
   ISLAND_BOUNDS,
-  BERLIN_DATA,
+  UTRECHT_DATA,
   waterAt
 } from './city-config.js';
 
@@ -2460,13 +2460,13 @@ const waterBoxCover = Fn(([x, a, b, s]) => {
   return clamp(min(xv.add(sv), b).sub(max(xv.sub(sv), a)).div(sv.mul(2.0)), 0.0, 1.0);
 });
 
-// Analytic night-reflection proxies follow the actual Spree/Spree Canal banks.
+// Analytic night-reflection proxies follow the actual Utrecht canal banks.
 // Simplification is CPU-only and cached; 64 segments bound fragment-shader cost.
 // Adjacent OSM water polygons often share internal edges, so test both sides and
-// retain only real land/water boundaries. Nearby OSM roofs supply Berlin heights.
-let _berlinReflectionBanks = null;
-function getBerlinReflectionBanks() {
-  if (_berlinReflectionBanks) return _berlinReflectionBanks;
+// retain only real land/water boundaries. Nearby OSM roofs supply Utrecht heights.
+let _utrechtReflectionBanks = null;
+function getUtrechtReflectionBanks() {
+  if (_utrechtReflectionBanks) return _utrechtReflectionBanks;
   const simplify = (points, tolerance) => {
     if (points.length < 3) return points;
     const a = points[0], b = points[points.length - 1];
@@ -2481,7 +2481,7 @@ function getBerlinReflectionBanks() {
     return farthest < 0 ? [a, b] : [...simplify(points.slice(0, farthest + 1), tolerance).slice(0, -1), ...simplify(points.slice(farthest), tolerance)];
   };
   const banks = [];
-  for (const water of BERLIN_DATA.water) for (const outline of [water.ring, ...(water.holes || [])]) {
+  for (const water of UTRECHT_DATA.water) for (const outline of [water.ring, ...(water.holes || [])]) {
     const points = [];
     for (let i = 0; i < outline.length; i += 2) points.push([outline[i], outline[i + 1]]);
     if (points.length < 3) continue;
@@ -2497,13 +2497,13 @@ function getBerlinReflectionBanks() {
     }
   }
   banks.sort((a, b) => b.length - a.length);
-  const buildings = BERLIN_DATA.buildings.filter(b => !b.part && b.h > 5 && b.h < 160).map(b => {
+  const buildings = UTRECHT_DATA.buildings.filter(b => !b.part && b.h > 5 && b.h < 160).map(b => {
     let x = 0, z = 0;
     for (let i = 0; i < b.ring.length; i += 2) { x += b.ring[i]; z += b.ring[i + 1]; }
     const points = b.ring.length / 2;
     return { x: x / points, z: z / points, h: b.h + (b.roofHeight || 0) };
   });
-  _berlinReflectionBanks = banks.slice(0, 64).map(bank => {
+  _utrechtReflectionBanks = banks.slice(0, 64).map(bank => {
     let total = 0, weight = 0;
     for (const building of buildings) {
       const distance = Math.hypot(building.x - bank.x, building.z - bank.z);
@@ -2516,11 +2516,11 @@ function getBerlinReflectionBanks() {
     const skyline = Math.min(145, Math.max(15, (weight ? total / weight : 22) / 0.63));
     return [...bank.a, ...bank.b, Math.round(skyline * 10) / 10];
   });
-  return _berlinReflectionBanks;
+  return _utrechtReflectionBanks;
 }
 
 /**
- * Berlin Spree, Spree Canal & park ponds: Physically Based Water TSL Material
+ * Utrecht canals & park ponds: Physically Based Water TSL Material
  * - Wave normals (normalNode) from 4 rotated, scaled & drifting samples of the LEAN wave texture whose energy follows
  *   slowly drifting wind patches; the slope variance below each pixel footprint (plus always-unresolved capillary
  *   ripples) becomes GGX roughness, so crisp chop near the piers turns into a soft glitter path towards the horizon
@@ -2529,7 +2529,7 @@ function getBerlinReflectionBanks() {
  *   (F0 = 0.02): it hands the transmitted share to the body colour and weights the pipeline's SSR, so reflections come
  *   only from the sky IBL, the sun's GGX specular and SSR (no painted-in glint).
  * - Night: the lit skyline & far shores sit beyond SSR's reach, so an analytic city (lots, lit windows, storefronts &
- *   riverside lamps on the real Spree/Spree Canal banks, with nearby OSM building heights) is reflected
+ *   riverside lamps on the real Utrecht canal banks, with nearby OSM building heights) is reflected
  *   through the same wave normals & Fresnel, blurred by the unresolved slopes into the familiar vertical light streaks.
  * - Park lakes, the Reservoir & fountains (well above the harbour) get finer, calmer ripples and a greener, duller body.
  */
@@ -2541,8 +2541,8 @@ function createWaterMaterial() {
 
   const waveTex = getWaterWaveTexture();
   const harbourY = ISLAND_BOUNDS ? ISLAND_BOUNDS.waterLevel : -2.2;
-  // Keep Berlin's existing water colour and wave mix when lowering its surface.
-  const pond = smoothstep(harbourY + 1.0, harbourY + 2.0, BERLIN_DATA ? float(-0.65) : positionWorld.y);
+  // Keep Utrecht's existing water colour and wave mix when lowering its surface.
+  const pond = smoothstep(harbourY + 1.0, harbourY + 2.0, UTRECHT_DATA ? float(-0.65) : positionWorld.y);
 
   // [tile size (m), rotation (rad), RMS slope]: incommensurate scales & angles so no pattern repeats
   const LAYERS = [
@@ -2605,12 +2605,12 @@ function createWaterMaterial() {
     return mix(body, lake, pond).mul(crestTint);
   })();
 
-  // Night: nearby Berlin facades and quay lamps, reflected along the same wave
+  // Night: nearby Utrecht facades and quay lamps, reflected along the same wave
   // ray and filtered by the unresolved slopes. The bank geometry and roof scale
-  // come from Berlin OSM data; no numbered-street or opposite-borough proxies.
+  // come from Utrecht OSM data; no numbered-street or opposite-borough proxies.
   const IB = ISLAND_BOUNDS;
-  const reflectionBanks = getBerlinReflectionBanks();
-  mat.userData.berlinReflectionBankCount = reflectionBanks.length;
+  const reflectionBanks = getUtrechtReflectionBanks();
+  mat.userData.utrechtReflectionBankCount = reflectionBanks.length;
   mat.emissiveNode = Fn(() => {
     const night = smoothstep(0.55, 1.35, cityUniforms.uInteriorGlow);
     const P = positionWorld.xz;
@@ -2679,7 +2679,7 @@ function createWaterMaterial() {
       .add(color(0xffcf9a).mul(ground.mul(shopLit).mul(0.4)))
       .add(color(0xffd9b0).mul(lamps));
     const treeline = mix(float(1.0), smoothstep(0.2, 0.42, tanEl), lake); // lake shores: only towers above the trees
-    // Fade the analytic proxy outside the detailed Mitte data boundary.
+    // Fade the analytic proxy outside the detailed Utrecht data boundary.
     const region = smoothstep(IB.minZ - 400.0, IB.minZ - 100.0, P.y).mul(float(1.0).sub(smoothstep(IB.maxZ + 200.0, IB.maxZ + 600.0, P.y)));
     return city.mul(brightness).mul(treeline).mul(fresnel).mul(night).mul(region);
   })();

@@ -7,8 +7,8 @@ import { GEO } from './nyc-geodata.js';
 // 3D BAG (LoD 2.2) 3D Tiles: real building volumes with roof shapes for the Netherlands.
 // https://3dbag.nl — tiles are glTF with node matrices in ECEF (glTF axes: x = X, y = Z, z = -Y).
 const BAG_BASE = 'https://3dbag.fsn1.your-objectstorage.com/v20250903/cesium3dtiles/lod22/';
-const AFF = GEO.berlin.meta.lonLatAffine;
-const [MIN_X, MIN_Z, MAX_X, MAX_Z] = GEO.berlin.meta.bounds;
+const AFF = GEO.utrecht.meta.lonLatAffine;
+const [MIN_X, MIN_Z, MAX_X, MAX_Z] = GEO.utrecht.meta.bounds;
 
 // Ellipsoidal height of street level at the Domtoren (NAP + geoid undulation), so that street level is y = 0.
 const GROUND_ELLIPSOID_HEIGHT = 47.8;

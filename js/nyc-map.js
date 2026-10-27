@@ -32,16 +32,16 @@ import {
 } from './city-config.js';
 
 // js/nyc-map.js
-// Original live radar and full-screen cartographic atlas, with mapped Berlin layers.
+// Original live radar and full-screen cartographic atlas, with mapped Utrecht layers.
 // 1 unit = 1 metre; x east, z south. True north is up. Geometry is the same
-// OpenStreetMap snapshot used by the original WebGPU engine's Berlin adapters.
+// OpenStreetMap snapshot used by the original WebGPU engine's Utrecht adapters.
 // NYCMapSystem remains the public class name to preserve upstream interfaces.
 
 const FONT = 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
 const MIN_ZOOM = Math.min(0.06, 280 / (ISLAND_BOUNDS.maxX - ISLAND_BOUNDS.minX), 260 / (ISLAND_BOUNDS.maxZ - ISLAND_BOUNDS.minZ));
 const MAX_ZOOM = 3.0; // single lots
 const RADAR_SCALE = 0.32; // radar pixels per metre on the ground (zooms out with altitude)
-const GRID_BEARING = (GEO.frame && GEO.frame.bearingDeg) ?? 0; // Berlin axes follow true north
+const GRID_BEARING = (GEO.frame && GEO.frame.bearingDeg) ?? 0; // Utrecht axes follow true north
 
 // Map palette, shared by the radar & the atlas (in step with css/style.css): graphite ground with the streets a shade
 // lighter than the blocks they run between, muted parks & water; a taxi-yellow GPS route, white landmarks & player,
@@ -87,9 +87,9 @@ const AREA_LABELS = [
  ['WILHELMINAPARK',500,1250,2]
 ];
 // New neighbourhood labels follow their actual clipped district geometry.
-for (const area of GEO.berlin?.meta.areas || []) {
-  if (!area.labelPoint || area.areaKm2 < 0.15 || ['mitte','kreuzberg','friedrichshain','charlottenburg','tiergarten'].includes(area.id)) continue;
-  AREA_LABELS.push([area.name.toLocaleUpperCase('de-DE'), ...area.labelPoint, 0]);
+for (const area of GEO.utrecht?.meta.areas || []) {
+  if (!area.labelPoint || area.areaKm2 < 0.15 || false) continue;
+  AREA_LABELS.push([area.name.toLocaleUpperCase('nl-NL'), ...area.labelPoint, 0]);
 }
 
 // Shorter map names for a few real street names
@@ -264,9 +264,9 @@ function mapLayers() {
     } else if (r.w >= 15) L.mainRoads.line(r.pts);
   }
 
-  // Actual irregular Berlin road surfaces, with bridge decks drawn over the Spree.
+  // Actual irregular Utrecht road surfaces, with bridge decks drawn over the canals.
   L.airfields=[];
-  for (const feature of GEO.berlin?.aeroways || []) {
+  for (const feature of GEO.utrecht?.aeroways || []) {
     const path = new Path2D(), polygon = Boolean(feature.ring?.length);
     if (polygon) {
       addRing(path, feature.ring);
@@ -274,14 +274,14 @@ function mapLayers() {
     } else if (feature.pts?.length) addLine(path, feature.pts);
     L.airfields.push({ path, polygon, width: feature.width || (feature.kind === 'runway' ? 45 : 15) });
   }
-  L.berlinRoads=[]; L.berlinBridges=[];
+  L.utrechtRoads=[]; L.utrechtBridges=[];
   if (GEO.city === 'Utrecht') {
     const widths=new Map();
     for(const r of ROADS){
       const pedestrian=['footway','path','pedestrian','steps','cycleway'].includes(r.kind);
       const key=`${r.bridge?'bridge':'road'}:${r.w}:${pedestrian}`;
       let item=widths.get(key);
-      if(!item){item={path:new Path2D(),width:r.w,pedestrian};widths.set(key,item);(r.bridge?L.berlinBridges:L.berlinRoads).push(item);}
+      if(!item){item={path:new Path2D(),width:r.w,pedestrian};widths.set(key,item);(r.bridge?L.utrechtBridges:L.utrechtRoads).push(item);}
       addLine(item.path,r.pts);
     }
   }
@@ -294,7 +294,7 @@ function mapLayers() {
   }
 
   L.ringbahn = new Path2D();
-  for (const polygon of GEO.berlin?.meta.ringbahn?.polygons || []) addRing(L.ringbahn, polygon.ring);
+  for (const polygon of GEO.utrecht?.meta.ringbahn?.polygons || []) addRing(L.ringbahn, polygon.ring);
 
   // Bridges, Manhattan landing to the far landing, deck width to scale
   L.bridges = [...EAST_RIVER_BRIDGES, ...OUTER_BRIDGES].map((br) => {
@@ -429,10 +429,10 @@ function drawPlayerArrow(ctx, tipY, halfWidth, tailY) {
   ctx.fill();
 }
 
-// The original GPS styling now follows Berlin's directed OSM road graph.
+// The original GPS styling now follows Utrecht's directed OSM road graph.
 let ROUTING=null;
 let ROUTE_CACHE=null;
-function getBerlinMapRoute(x0,z0,x1,z1){
+function getUtrechtMapRoute(x0,z0,x1,z1){
   const graph=GEO.roadGraph;
   if(GEO.city !== 'Utrecht'||!graph)return null;
   if(!ROUTING){
@@ -517,7 +517,7 @@ class NYCMapSystem {
     const elCounts = document.getElementById('fullmap-counts');
     if (elCounts) elCounts.textContent = `${ROAD_NAME_COUNT} streets · ${BLOCKS.length.toLocaleString('en-US')} blocks`;
     const ringLegend = document.getElementById('ringbahn-legend');
-    if (ringLegend) ringLegend.hidden = !GEO.berlin?.meta.ringbahn;
+    if (ringLegend) ringLegend.hidden = !GEO.utrecht?.meta.ringbahn;
 
     // The map is drawn grid north up; the compass needle points to true north, 29° to its left
     const needle = document.getElementById('map-compass-needle');
@@ -548,9 +548,9 @@ class NYCMapSystem {
     this.searchHighlight = '';
     this.searchPath = null;
     this.textWidths = new Map();
-    // Start with Berlin's central landmark as the active GPS waypoint.
-    const ts = NYC_LANDMARKS.find((l) => l.id === 'pkin') || { x: 0, z: 0 };
-    this.waypoint = { x: ts.x, z: ts.z, name: ts.name || 'PKiN' };
+    // Start with Utrecht's central landmark as the active GPS waypoint.
+    const ts = NYC_LANDMARKS.find((l) => l.name === 'Domtoren') || { x: 0, z: 0 };
+    this.waypoint = { x: ts.x, z: ts.z, name: ts.name || 'Domtoren' };
 
     // Street names measured before the web font arrived would be spaced for the fallback font: measure & draw again
     if (document.fonts) {
@@ -889,9 +889,9 @@ class NYCMapSystem {
       if (field.polygon) ctx.fill(field.path, 'evenodd');
       else { ctx.lineWidth = Math.max(field.width, px(0.5)); ctx.stroke(field.path); }
     }
-    for(const r of L.berlinRoads){ctx.strokeStyle=r.pedestrian?MAP.blockEdge:MAP.streets;ctx.lineWidth=Math.max(r.width,px(.5));ctx.stroke(r.path);}
+    for(const r of L.utrechtRoads){ctx.strokeStyle=r.pedestrian?MAP.blockEdge:MAP.streets;ctx.lineWidth=Math.max(r.width,px(.5));ctx.stroke(r.path);}
 
-    // 4. Mapped park water bodies and the Spree
+    // 4. Mapped park water bodies and the canals
     if (v.sees(L.cpBounds)) {
       ctx.fillStyle = MAP.lawn;
       ctx.fill(L.cpLawns);
@@ -908,7 +908,7 @@ class NYCMapSystem {
       ctx.stroke(L.cpWater);
     }
 
-    for(const r of L.berlinBridges){ctx.strokeStyle=MAP.streets;ctx.lineWidth=r.width;ctx.stroke(r.path);}
+    for(const r of L.utrechtBridges){ctx.strokeStyle=MAP.streets;ctx.lineWidth=r.width;ctx.stroke(r.path);}
 
     // 5. Building footprints, lowest first
     if (s >= 0.18) {
@@ -959,7 +959,7 @@ class NYCMapSystem {
     ctx.lineCap = 'round';
 
     // The actual railway loop makes the expansion boundary visible at city scale.
-    if (!isMinimap && GEO.berlin?.meta.ringbahn) {
+    if (!isMinimap && GEO.utrecht?.meta.ringbahn) {
       ctx.strokeStyle = MAP.halo;
       ctx.lineWidth = px(4);
       ctx.stroke(L.ringbahn);
@@ -1144,7 +1144,7 @@ class NYCMapSystem {
     if (this.waypoint) {
       const wx = toX(this.waypoint.x);
       const wy = toY(this.waypoint.z);
-      const route=getBerlinMapRoute(px,pz,this.waypoint.x,this.waypoint.z);
+      const route=getUtrechtMapRoute(px,pz,this.waypoint.x,this.waypoint.z);
       drawRoute(ctx, 0, 0, wx, wy, 3,route&&route.map(p=>({x:toX(p.x),z:toY(p.z)})));
       drawWaypoint(ctx, wx, wy, 4.5);
     }
@@ -1235,7 +1235,7 @@ class NYCMapSystem {
     if (this.waypoint) {
       const wx = toX(this.waypoint.x);
       const wy = toY(this.waypoint.z);
-      const route=getBerlinMapRoute(ent.position.x,ent.position.z,this.waypoint.x,this.waypoint.z);
+      const route=getUtrechtMapRoute(ent.position.x,ent.position.z,this.waypoint.x,this.waypoint.z);
       drawRoute(ctx, toX(ent.position.x), toY(ent.position.z), wx, wy, 4,route&&route.map(p=>({x:toX(p.x),z:toY(p.z)})));
       drawWaypoint(ctx, wx, wy, 7);
     }
@@ -1391,4 +1391,4 @@ class NYCMapSystem {
   }
 }
 
-export { NYCMapSystem, getBerlinMapRoute };
+export { NYCMapSystem, getUtrechtMapRoute };

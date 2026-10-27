@@ -1,19 +1,19 @@
 import { GEO } from './nyc-geodata.js';
 
-// Utrecht spatial adapter for mrdoob/slop-newyork's engine, via the irregular-city data path of the Slop Berlin / Warsaw forks.
+// Utrecht spatial adapter for mrdoob/slop-newyork's engine, via an irregular-city data path.
 // Legacy export names are retained as API aliases; all visible geography is Utrecht.
 // 1 unit = 1 metre, x east, z south, origin at the Domtoren (true north up).
-const BERLIN_DATA = GEO.berlin;
+const UTRECHT_DATA = GEO.utrecht;
 const toPts = (flat) => { const out=[]; for(let i=0;i<flat.length;i+=2)out.push({x:flat[i],z:flat[i+1]});return out; };
-const AFF = BERLIN_DATA.meta.lonLatAffine;
+const AFF = UTRECHT_DATA.meta.lonLatAffine;
 // Equirectangular fit around the Domtoren (meta.lonLatAffine): enough for teleports.
 const projectLonLat = (lon,lat) => { const a=lon-AFF.lon0, b=lat-AFF.lat0; return {x:AFF.x[0]+AFF.x[1]*a+AFF.x[2]*b, z:AFF.z[0]+AFF.z[1]*a+AFF.z[2]*b}; };
-const [minX,minZ,maxX,maxZ] = BERLIN_DATA.meta.bounds;
+const [minX,minZ,maxX,maxZ] = UTRECHT_DATA.meta.bounds;
 const ISLAND_BOUNDS = {minX,maxX,minZ,maxZ,sidewalkHeight:0.22,waterLevel:-2.2};
 const CUT_Z=minZ;
 const MANHATTAN_COASTLINE=toPts(GEO.manhattan);
 const getIslandBoundsAtZ=()=>({westX:minX,eastX:maxX});
-// Mitte has an arbitrary mapped street network. Empty legacy grid registries prevent
+// Utrecht has an arbitrary mapped street network. Empty legacy grid registries prevent
 // the original corridor builder from inventing axis-aligned Manhattan streets.
 const AVENUES=[], ALL_AVENUES=[], STREETS=[], ALL_STREETS=[];
 const BROADWAY_LINE=[];
@@ -23,10 +23,10 @@ const ROOSEVELT_ISLAND_POLYGON=[],GOVERNORS_ISLAND_POLYGON=[],NJ_SHORELINE_POLYG
 const LIBERTY_STATUE_POS={x:0,z:0};
 // The legacy park bounds describe a raised Central Park lawn: Utrecht has none.
 const CENTRAL_PARK_BOUNDS={minX:-99999,maxX:-99998,minZ:-99999,maxZ:-99998};
-const ROADS=BERLIN_DATA.roads.filter(r=>!r.tunnel).map(r=>({...r,raw:r.name,name:r.name||`Unnamed ${r.kind}`,w:r.width,dir:r.oneway?(r.reverse?-1:1):0,highway:/motorway|trunk/.test(r.kind),pts:toPts(r.pts)}));
+const ROADS=UTRECHT_DATA.roads.filter(r=>!r.tunnel).map(r=>({...r,raw:r.name,name:r.name||`Unnamed ${r.kind}`,w:r.width,dir:r.oneway?(r.reverse?-1:1):0,highway:/motorway|trunk/.test(r.kind),pts:toPts(r.pts)}));
 const DRIVABLE=new Set(['motorway','motorway_link','trunk','trunk_link','primary','primary_link','secondary','secondary_link','tertiary','tertiary_link','residential','unclassified','living_street']);
 const ROAD_DRIVING=ROADS.filter(r=>DRIVABLE.has(r.kind));
-const BERLIN_AREAS=(BERLIN_DATA.meta.areas||[]).map(a=>({...a,polygons:(a.polygons||[]).map(p=>({
+const UTRECHT_AREAS=(UTRECHT_DATA.meta.areas||[]).map(a=>({...a,polygons:(a.polygons||[]).map(p=>({
  poly:toPts(p.ring),holes:(p.holes||[]).map(toPts)
 }))}));
 function districtAt(x,z){
@@ -45,7 +45,7 @@ function makeBlock(b,id,park=0){
  a*=.5;cx=a?cx/(6*a):(minX+maxX)/2;cz=a?cz/(6*a):(minZ+maxZ)/2;
  return {id,osmId:b.id,poly,holes,rects:[],frames:null,park,parkName:park?b.name:'',rect:false,area:Math.abs(a),minX,maxX,minZ,maxZ,cx,cz,median:false,district:districtAt(cx,cz)};
 }
-const BLOCKS=[...BERLIN_DATA.buildings.filter(b=>!b.part).map((b,i)=>makeBlock(b,i)),...BERLIN_DATA.parks.map((b,i)=>makeBlock(b,'park:'+i,1))];
+const BLOCKS=[...UTRECHT_DATA.buildings.filter(b=>!b.part).map((b,i)=>makeBlock(b,i)),...UTRECHT_DATA.parks.map((b,i)=>makeBlock(b,'park:'+i,1))];
 const LANDMARK_BLOCKS=new Set();
 const LANDMARK_SITES=GEO.landmarks;
 function getBlockBounds(col,row){return BLOCKS[Number.isInteger(col)?col:0]||{minX:0,maxX:0,minZ:0,maxZ:0,cx:0,cz:0,width:0,depth:0};}
@@ -90,6 +90,26 @@ function nearestRoads(x, z, radius = 60) {
   return [...best.values()].sort((a, b) => a.dist - b.dist);
 }
 
+/**
+ * Whether a road carries (x, z) across water. Unlike nearestRoads this looks at every segment, not one per road name,
+ * so an unnamed or same-named footway beside a bridge can't hide it. Walkers also use any mapped road over water
+ * (quays, decks and passages that the water polygons overlap); other modes need a bridge.
+ */
+function roadCrossesWater(x, z, anyRoad = false) {
+  const ix = Math.floor(x / ROAD_CELL), iz = Math.floor(z / ROAD_CELL);
+  for (let cx = ix - 1; cx <= ix + 1; cx++) for (let cz = iz - 1; cz <= iz + 1; cz++) {
+    const list = ROAD_GRID.get(cx * 100000 + cz);
+    if (!list) continue;
+    for (const s of list) {
+      if (!anyRoad && !s.r.bridge) continue;
+      const dx = s.bx - s.ax, dz = s.bz - s.az;
+      const t = Math.max(0, Math.min(1, ((x - s.ax) * dx + (z - s.az) * dz) / (dx * dx + dz * dz || 1e-9)));
+      if (Math.hypot(s.ax + t * dx - x, s.az + t * dz - z) < (s.r.w || 3) / 2 + 1) return true;
+    }
+  }
+  return false;
+}
+
 // Spatial index of the blocks (64 m cells)
 const BLOCK_CELL = 64;
 const BLOCK_GRID = new Map();
@@ -129,7 +149,7 @@ function sidewalkAt(x,z){
 }
 
 
-const WATER_POLYGONS=BERLIN_DATA.water.map(w=>{const poly=toPts(w.ring);return {...w,poly,inner:(w.holes||[]).map(toPts),minX:Math.min(...poly.map(p=>p.x)),maxX:Math.max(...poly.map(p=>p.x)),minZ:Math.min(...poly.map(p=>p.z)),maxZ:Math.max(...poly.map(p=>p.z))};});
+const WATER_POLYGONS=UTRECHT_DATA.water.map(w=>{const poly=toPts(w.ring);return {...w,poly,inner:(w.holes||[]).map(toPts),minX:Math.min(...poly.map(p=>p.x)),maxX:Math.max(...poly.map(p=>p.x)),minZ:Math.min(...poly.map(p=>p.z)),maxZ:Math.max(...poly.map(p=>p.z))};});
 function waterAtExact(x,z){return WATER_POLYGONS.some(w=>x>=w.minX&&x<=w.maxX&&z>=w.minZ&&z<=w.maxZ&&pointInPoly(w.poly,x,z)&&!w.inner.some(h=>pointInPoly(h,x,z)));}
 // The Oudegracht and the singels are mapped water polygons, and traffic calls waterAt many times per frame.
 // A 4 m grid (scanline even-odd fill) answers inside/outside; only cells crossed by a shoreline use the exact test.
@@ -171,13 +191,13 @@ defaultSpawn.x-=Math.cos(defaultSpawn.heading)*1.8;defaultSpawn.z+=Math.sin(defa
 const streetZ=(n=37)=>defaultSpawn.z+(37-Number(n))*25;
 const NYC_LANDMARKS=[
  ['dom','Domtoren','Domtoren',5.12139,52.09062,'Binnenstad','Korte Nieuwstraat'],
- ['centraal','Utrecht Centraal','Centraal',5.1100,52.0894,'Stationsgebied','Stationsplein'],
+ ['centraal','Utrecht Centraal','Centraal',5.1100,52.0894,'Stationsgebied','Moreelsehoek'],
  ['hoogcatharijne','Hoog Catharijne','Hoog Catharijne',5.1130,52.0905,'Stationsgebied','Catharijnesingel'],
- ['stadhuis','Stadhuis','Stadhuis',5.1195,52.0919,'Binnenstad','Stadhuisbrug'],
+ ['stadhuis','Stadhuis','Stadhuis',5.1195,52.0919,'Binnenstad','Korte Minrebroederstraat'],
  ['vredenburg','TivoliVredenburg','Vredenburg',5.1148,52.0929,'Binnenstad','Vredenburg'],
- ['neude','Neude','Neude',5.1163,52.0950,'Binnenstad','Neude'],
+ ['neude','Neude','Neude',5.1163,52.0950,'Binnenstad','Jacobskerkhof'],
  ['janskerkhof','Janskerkhof','Janskerkhof',5.1244,52.0944,'Binnenstad','Janskerkhof'],
- ['oudegracht','Oudegracht · Werven','Oudegracht',5.1186,52.0903,'Binnenstad','Oudegracht'],
+ ['oudegracht','Oudegracht · Werven','Oudegracht',5.1186,52.0903,'Binnenstad','Zadelstraat'],
  ['centraalmuseum','Centraal Museum','Centraal Museum',5.1264,52.0869,'Museumkwartier','Agnietenstraat'],
 ].map(([id,name,short,lon,lat,district,road])=>({id,name,short,...projectLonLat(lon,lat),district,road,lon,lat}));
 const TELEPORT_LOCATIONS={};
@@ -194,7 +214,7 @@ function getLocationLabel(x,z){
  if(nearby.length)return nearby[0].road.name;
  if(waterAt(x,z))return 'Singel · Utrecht';
  const district=districtAt(x,z);
- const name=BERLIN_AREAS.find(a=>a.id===district)?.name||district.split('_').map(w=>w[0].toUpperCase()+w.slice(1)).join(' ');
+ const name=UTRECHT_AREAS.find(a=>a.id===district)?.name||district.split('_').map(w=>w[0].toUpperCase()+w.slice(1)).join(' ');
  return name+' · Utrecht';
 }
 // Keyboard shortcuts are ignored while typing into a form field (e.g. the map's street search box)
@@ -224,7 +244,7 @@ function walkSignal(time, isAvenue) {
   return t < walk;
 }
 export {
-  BERLIN_DATA, BERLIN_AREAS, toPts, projectLonLat, pointInPoly, waterAt, waterAtExact, nearestDrivingPoint, defaultSpawn, sidewalkAt,
+  UTRECHT_DATA, UTRECHT_AREAS, toPts, projectLonLat, pointInPoly, waterAt, waterAtExact, nearestDrivingPoint, defaultSpawn, sidewalkAt,
   AVENUES,
   ALL_AVENUES,
   CENTRAL_PARK_BOUNDS,
@@ -267,6 +287,7 @@ export {
   districtAt,
   blockAt,
   nearestRoads,
+  roadCrossesWater,
   getBlockBounds,
   getLocationLabel,
   fromOldFrame,

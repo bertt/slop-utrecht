@@ -10,27 +10,24 @@ test.before(async () => {
   ({ TELEPORT_LOCATIONS, LANDMARK_SITES, blockAt, nearestRoads, getIslandBoundsAtZ } = await import('../js/city-config.js'));
 });
 
-test('every teleport button has a destination on a real roadway inside Manhattan', () => {
+test('every teleport button has a destination on a real roadway in Utrecht', () => {
   const buttons = [...read('index.html').matchAll(/data-teleport="([^"]+)"/g)].map((match) => match[1]);
   assert.deepEqual(Object.keys(TELEPORT_LOCATIONS).sort(), buttons.sort());
   for (const [name, point] of Object.entries(TELEPORT_LOCATIONS)) {
     assert.ok(Number.isFinite(point.heading), `${name} has a heading`);
     assert.equal(blockAt(point.x, point.z), null, `${name} lands outside building blocks`);
-    const shore = getIslandBoundsAtZ(point.z);
-    assert.ok(point.x > shore.westX + 8 && point.x < shore.eastX - 8, `${name} stays on the island`);
     const nearby = nearestRoads(point.x, point.z, 20);
     assert.ok(nearby.some(({ road, dist }) => dist < road.w / 2), `${name} lands within a street's width`);
   }
 });
 
-test('One World Trade Center arrives on Vesey Street facing the tower', () => {
-  const point = TELEPORT_LOCATIONS.owtc;
-  const tower = LANDMARK_SITES['One World Trade Center'];
-  assert.ok(nearestRoads(point.x, point.z, 20).some(({ road, dist }) => road.name === 'Vesey St' && dist < 1));
+test('Domtoren arrival faces the tower', () => {
+  const point = TELEPORT_LOCATIONS.dom;
+  const tower = LANDMARK_SITES['Domtoren'];
   const distance = Math.hypot(tower.x - point.x, tower.z - point.z);
-  assert.ok(distance > 100 && distance < 220, 'leave space for the tower view');
+  assert.ok(distance > 10 && distance < 400, 'leave space for the tower view');
   const alignment = ((tower.x - point.x) * Math.sin(point.heading) + (tower.z - point.z) * Math.cos(point.heading)) / distance;
-  assert.ok(alignment > 0.999, 'face the tower rather than the neighboring buildings');
+  assert.ok(alignment > 0.999, 'face the tower');
 });
 
 test('preset and map teleports share arrival resets and mark the resolved landing point', () => {

@@ -4,7 +4,7 @@ A simulation of the inner city of Utrecht built with [three.js](https://threejs.
 
 [Try it live](https://bertt.github.io/slop-utrecht/)
 
-Based on [Slop New York](https://github.com/mrdoob/slop-newyork) by mrdoob, with the irregular-city approach from the Berlin/Warsaw forks.
+Based on [Slop New York](https://github.com/mrdoob/slop-newyork) by mrdoob.
 
 ## Make it your own
 
@@ -22,4 +22,4 @@ Explore other cities and community remixes in [Slop Cities](https://github.com/z
 
 The project code is available under the [MIT License](LICENSE).
 
-Geographic data: NYC Open Data and © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright) (ODbL). The trees come from a GeoParquet file in the [Utrecht Portolan catalog](https://browser.portolan-sdi.org/#/external/utrecht.blob.core.windows.net/catalog/catalog.json) (Gemeente Utrecht, bomenkaart 2026). Third-party data and dependencies retain their respective licenses.
+Geographic data: © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright) (ODbL). The trees come from a GeoParquet file in the [Utrecht Portolan catalog](https://browser.portolan-sdi.org/#/external/utrecht.blob.core.windows.net/catalog/catalog.json) (Gemeente Utrecht, bomenkaart 2026). Third-party data and dependencies retain their respective licenses.

@@ -56,7 +56,7 @@ function buildRoadNetwork(sidewalks, obstacles, signalIntersections = []) {
     return false;
   }
 
-  // Berlin facades follow surveyed edges. Test their true oriented rectangles,
+  // Utrecht facades follow surveyed edges. Test their true oriented rectangles,
   // so a diagonal facade's large axis-aligned bounds cannot block the street.
   function overlapsFootprint(r,minX,maxX,minZ,maxZ) {
     if (!r.obb) return true;
@@ -72,7 +72,7 @@ function buildRoadNetwork(sidewalks, obstacles, signalIntersections = []) {
       const shore = getIslandBoundsAtZ(z);
       if (minX < shore.westX + SHORE_MARGIN || maxX > shore.eastX - SHORE_MARGIN) return false;
     }
-    // Berlin's Spree crosses the district instead of surrounding it. The original
+    // Utrecht's canals cross the district instead of surrounding it. The original
     // lane/footprint checks remain unchanged; mapped bridges supply a land surface.
     if (GEO.city === 'Utrecht') {
       for (const [x, z] of [[minX,minZ],[minX,maxZ],[maxX,minZ],[maxX,maxZ]]) {
@@ -1045,8 +1045,8 @@ function buildRoadNetwork(sidewalks, obstacles, signalIntersections = []) {
     const n = nodes.find((m) => Math.abs(m.x - s.x) < 6 && Math.abs(m.z - s.z) < 6); // same tolerance as nodeAt
     if (n) n.signal = true;
   }
-  // The same signal/right-of-way system uses the mapped Berlin signal locations.
-  if (GEO.city === 'Utrecht') for (const p of GEO.berlin.signals || []) {
+  // The same signal/right-of-way system uses the mapped Utrecht signal locations.
+  if (GEO.city === 'Utrecht') for (const p of GEO.utrecht.signals || []) {
     let best = null, distance = 48;
     for (const n of nodes) {
       if (n.shape || !n.in || !n.out) continue;

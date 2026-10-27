@@ -8,7 +8,7 @@ import {
   streetZ,
   defaultSpawn,
   waterAt,
-  nearestRoads
+  roadCrossesWater
 } from './city-config.js';
 import { cityUniforms, createCarPaintMaterial, createContactShadowMaterial } from './tsl-materials.js';
 import {
@@ -379,7 +379,7 @@ function createNYLicensePlateTexture() {
   c.width = 256;
   c.height = 128;
   const ctx = c.getContext('2d');
-  ctx.fillStyle = '#f1f1e9';
+  ctx.fillStyle = '#f6c500';
   ctx.fillRect(0, 0, 256, 128);
   ctx.strokeStyle = '#171c21';
   ctx.lineWidth = 5;
@@ -389,10 +389,10 @@ function createNYLicensePlateTexture() {
   ctx.fillStyle = '#ffffff';
   ctx.font = '700 22px Arial, sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText('D', 20, 91);
+  ctx.fillText('NL', 20, 91);
   ctx.fillStyle = '#111820';
   ctx.font = '700 42px Arial, sans-serif';
-  ctx.fillText('B · TX 187', 143, 80);
+  ctx.fillText('GX-123-B', 143, 80);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
@@ -724,7 +724,7 @@ class ThirdPersonControllerManager {
       chassisPivot.add(decal);
     }
 
-    // 3. High-Detail NY Empire Gold License Plates on the bumpers
+    // 3. High-Detail Dutch yellow license plates on the bumpers
     const nyPlateTex = createNYLicensePlateTexture();
     const nyPlateMat = new THREE.MeshStandardNodeMaterial({ map: nyPlateTex, roughness: 0.28 });
     const rearPlate = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.14, 0.02), nyPlateMat);
@@ -1629,8 +1629,7 @@ class ThirdPersonControllerManager {
   }
 
   isUnbridgedWater(x, z) {
-    return typeof waterAt === 'function' && waterAt(x, z) &&
-      !(typeof nearestRoads === 'function' && nearestRoads(x, z, 25).some(({road, dist}) => road.bridge && dist < road.w / 2 + 1));
+    return typeof waterAt === 'function' && waterAt(x, z) && !roadCrossesWater(x, z, this.activeMode === 'person');
   }
 
   getGroundHeight(x, z, mode = 'person') {
