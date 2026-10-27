@@ -2,6 +2,7 @@
 // tools/build-utrecht-shops.mjs). Each sign is a quad on the nearest building wall, all sharing one name atlas.
 import * as THREE from 'three/webgpu';
 import { UTRECHT_SHOPS } from './utrecht-shops.js';
+import { waterAt } from './city-config.js';
 
 const CELL_W = 256, CELL_H = 40, COLS = 8, MAX_NAMES = 800;
 const MAX_WALL_DISTANCE = 25, MIN_WALL_LENGTH = 3, SIGN_Y = 3.4, MIN_SPACING = 2.5;
@@ -102,6 +103,7 @@ export function createShopSigns(buildings) {
     const t = Math.max(half, Math.min(1 - half, wall.t));
     const cx = wall.ax + wall.dx * t + nx * 0.06, cz = wall.az + wall.dz * t + nz * 0.06;
     if (placed.some((p) => Math.hypot(p[0] - cx, p[1] - cz) < MIN_SPACING)) continue;
+    if (waterAt(cx, cz) || waterAt(cx + nx * 1.5, cz + nz * 1.5)) continue;
     placed.push([cx, cz]);
     const tx = nz, tz = -nx; // along the wall, so that tangent x up = outward normal
     const u0 = (cell % COLS) / COLS, u1 = u0 + 1 / COLS;

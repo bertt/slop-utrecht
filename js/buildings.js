@@ -2045,15 +2045,6 @@ function buildCityBlocks(scene, { bag = false } = {}) {
             detail.cornices.push({ x, z, y: eave, w: length + 0.2, h: 0.44, d: 0.85, ry });
             if (height > 13) detail.cornices.push({ x, z, y: 4.4, w: length + 0.12, h: 0.22, d: 0.62, ry });
           }
-          if (shop && length > 9 && rand() < 0.48) {
-            const count = Math.min(3, Math.floor(length / 8));
-            for (let j = 0; j < count; j++) {
-              const t = (j + 0.5) / count;
-              // The upstream awning is long along local Z, unlike facade boxes.
-              detail.awnings.push({ x: a.x + dx * t + nx * 0.8, z: a.z + dz * t + nz * 0.8, y: 3.8,
-                w: 1.65, d: Math.min(6.4, length / count - 1.0), dir: -1, colorIdx: Math.floor(rand() * 5), ry: Math.atan2(nx, nz) + Math.PI / 2 });
-            }
-          }
         }
       }
       let roof = bag ? null : utrechtPolygonGeometry(poly, holes, eave + 0.035);
