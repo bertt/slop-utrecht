@@ -303,8 +303,8 @@ class CityAudioSystem {
     const now = this.context.currentTime;
     const crash = kind === 'crash';
     const severity = clamp(options.severity ?? options.intensity ?? 1, 0, 1);
-    const ref = crash ? 4 + severity * 8 : kind === 'horn' ? 8 : kind === 'talk' ? 2 : 1.8;
-    const range = crash ? 50 + severity * 110 : kind === 'horn' ? 140 : kind === 'talk' ? 30 : kind === 'footstep' ? 22 : 35;
+    const ref = crash ? 4 + severity * 8 : kind === 'horn' ? 8 : kind === 'bell' ? 3 : kind === 'talk' ? 2 : 1.8;
+    const range = crash ? 50 + severity * 110 : kind === 'horn' ? 140 : kind === 'bell' ? 60 : kind === 'talk' ? 30 : kind === 'footstep' ? 22 : 35;
     if (Math.hypot(source.x - this.listener.x, source.y - this.listener.y, source.z - this.listener.z) > range) return false;
     if (crash || options.priority) {
       // Impacts are immediate, between the 10 Hz ambience updates. Reclaim finished events first, then let
@@ -324,7 +324,7 @@ class CityAudioSystem {
         this.removeEvent(weakest);
       }
       if (this.events.length >= this.limits.events) {
-        let background = this.events.findIndex(event => event.kind !== 'crash' && event.kind !== 'horn');
+        let background = this.events.findIndex(event => event.kind !== 'crash' && event.kind !== 'horn' && event.kind !== 'bell');
         // A struck driver's reaction must still play when the ambience or a pile-up fills the pool.
         if (background < 0 && options.priority) background = 0;
         if (background < 0) return false;
@@ -337,7 +337,7 @@ class CityAudioSystem {
     // Do not fade away the first few milliseconds of a crash: its spatial gain and filtering are ready at onset.
     emitter.update(source, this.listener, now, range, true, crash);
     const voice = playEvent(this.context, this.resources, kind, emitter.input, { seed: source.seed, ...options });
-    this.events.push({ kind, voice, emitter, id: source.id, range, severity, position: { ...source }, follow: kind === 'talk' || kind === 'horn' });
+    this.events.push({ kind, voice, emitter, id: source.id, range, severity, position: { ...source }, follow: kind === 'talk' || kind === 'horn' || kind === 'bell' });
     return true;
   }
 
@@ -364,7 +364,9 @@ class CityAudioSystem {
     const vehicle = impact.kind === 'vehicle' ? a === player ? b : b === player ? a : null : null;
     let honked = false;
     if (vehicle && separated && now - contact.horn > 1.5) {
-      honked = this.emit('horn', { id: vehicle, x: vehicle.x, y: 0.7, z: vehicle.z,
+      // anything involving a cyclist rings a bell instead of sounding a horn
+      const cyclist = vehicle.bike || player?.type === 'cyclist' || player?.type === 'cargobike';
+      honked = this.emit(cyclist ? 'bell' : 'horn', { id: vehicle, x: vehicle.x, y: 0.7, z: vehicle.z,
         heading: vehicle.yaw + vehicle.yawOffset, seed: ++this.collisionSequence },
       { intensity: 0.8, when: now + 0.12, priority: true });
       if (honked) contact.horn = this.lastHorn = now;
@@ -434,7 +436,7 @@ class CityAudioSystem {
         }
         const source = event.follow && (sources.motors.find(s => s.id === event.id) || sources.people.find(s => s.id === event.id));
         if (source) Object.assign(event.position, source);
-        else if (event.kind === 'horn' && event.id.edge) {
+        else if ((event.kind === 'horn' || event.kind === 'bell') && event.id.edge) {
           // Collision horns can belong to traffic outside the nearest motor voices.
           event.position.x = event.id.x;
           event.position.z = event.id.z;

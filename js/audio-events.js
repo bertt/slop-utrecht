@@ -175,6 +175,18 @@ function horn(ctx, duration, seed) {
   }, 0.7);
 }
 
+// A bicycle bell: a struck metal dome, bright inharmonic partials ringing out
+function bicycleBell(ctx, pitch, seed) {
+  const random = randomSource(seed);
+  const partials = [[1, 1, 7], [2.76, 0.55, 9], [5.4, 0.3, 14], [8.9, 0.12, 22]];
+  return makeBuffer(ctx, 0.32, (t) => {
+    const strike = Math.exp(-t * 400) * (random() * 2 - 1) * 0.25;
+    let tone = 0;
+    for (const [ratio, gain, decay] of partials) tone += Math.sin(TAU * pitch * ratio * t) * gain * Math.exp(-t * decay);
+    return (tone * (1 - Math.exp(-t * 3000)) + strike) * 0.6;
+  }, 0.7);
+}
+
 function crashBody(ctx, seed) {
   const random = randomSource(seed);
   const coefficients = [35, 200 + random() * 60, 800].map((frequency) => 1 - Math.exp(-TAU * frequency / ctx.sampleRate));
@@ -298,6 +310,7 @@ export function createEventResources(ctx, resources) {
     footsteps: Array.from({ length: 8 }, (_, i) => footstep(ctx, i + 1)),
     syllables: speakers.map((speaker, voice) => Array.from({ length: 4 }, (_, i) => speechFragment(ctx, speaker, i + voice * 4 + 20))),
     horns: [0.22, 0.37, 0.55].map((duration, i) => horn(ctx, duration, 17 + i)),
+    bells: [0, 1, 2].map((i) => bicycleBell(ctx, 2300 + i * 150, 61 + i)),
     crashes: {
       body: Array.from({ length: 3 }, (_, i) => crashBody(ctx, i + 301)),
       metal: Array.from({ length: 3 }, (_, i) => crashMetal(ctx, i + 401)),
@@ -313,7 +326,7 @@ export function playEvent(ctx, resources, kind, output, options = {}) {
   const random = randomSource(options.seed);
   const start = Math.max(ctx.currentTime, finite(options.when, ctx.currentTime));
   const intensity = clamp(finite(options.intensity, 1));
-  const levels = { footstep: 0.22, talk: 0.065, horn: 0.23, signal: 0.13, crash: 0.35 };
+  const levels = { footstep: 0.22, talk: 0.065, horn: 0.23, bell: 0.2, signal: 0.13, crash: 0.35 };
   if (!Object.hasOwn(levels, kind) || intensity === 0) return { endTime: start, dispose() {} };
   const gain = ctx.createGain();
   gain.gain.value = intensity * levels[kind];
@@ -381,6 +394,12 @@ export function playEvent(ctx, resources, kind, output, options = {}) {
     }
   } else if (kind === 'horn') {
     play(resources.horns[Math.floor(random() * resources.horns.length)], start, 0.94 + random() * 0.12);
+  } else if (kind === 'bell') {
+    // "tring tring": two quick rings
+    const bell = resources.bells[Math.floor(random() * resources.bells.length)];
+    const rate = 0.97 + random() * 0.08;
+    const end = play(bell, start, rate);
+    play(bell, end - bell.duration / rate + 0.17, rate, 0.85);
   } else if (kind === 'crash') {
     const severity = clamp(finite(options.severity, intensity));
     const variant = Math.floor(random() * resources.crashes.body.length);
