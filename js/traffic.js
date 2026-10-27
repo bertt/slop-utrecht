@@ -652,8 +652,10 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
   const stopAt = (v, d, s0 = 1) => brake(v, d, 0, s0, 0);
 
   // Braking for the vehicle ahead of position s in a lane list; remembers the nearest one
-  function follow(v, list, s) {
-    const o = ahead(list, s, v);
+  function follow(v, list, s, skipCars = false) {
+    let o = ahead(list, s, v);
+    // bikes filter past slower cars in their own lane (alongside, see bikeSidestep) rather than queue behind them
+    if (skipCars) while (o && !o.v.bus) o = ahead(list, o.s, v);
     if (!o) return 0;
     const gap = o.s - o.v.half - s - v.half;
     if (gap > LOOKAHEAD) return 0;
@@ -943,15 +945,16 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
   // pulling out of an intersection, nor in the last 12 m before the next.
   function changeLanes(v) {
     const e = v.edge;
-    if (v.conn || v.commit || Math.abs(v.dl) > 0.5 || v.s < v.half || e.len - v.s - v.half < 12) return;
+    if (v.conn || v.commit || v.off || Math.abs(v.dl) > 0.5 || v.s < v.half || e.len - v.s - v.half < 12) return;
     let target = -1;
     if (v.move.out[v.lane] < 0) {
       const t = v.lane + Math.sign(nearestLane(v.move, v.lane) - v.lane);
       if (laneSafe(v, t, -4)) target = t;
-    } else if (v.speed > 2) {
-      let best = laneAcc(v, v.lane) + 0.6;
+    } else if (v.bike || v.speed > 2) {
+      // bikes never sit in a queue: they take any adjacent lane with room that lets them keep going
+      let best = laneAcc(v, v.lane) + (v.bike ? 0.05 : 0.6);
       for (let t = v.lane - 1; t <= v.lane + 1; t += 2) {
-        if (t < 0 || t >= e.lanes.length || v.move.out[t] < 0 || !laneSafe(v, t, -3)) continue;
+        if (t < 0 || t >= e.lanes.length || v.move.out[t] < 0 || !laneSafe(v, t, v.bike ? -6 : -3)) continue;
         const acc = laneAcc(v, t);
         if (acc > best) {
           best = acc;
@@ -969,6 +972,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
   function laneSafe(v, t, bSafe) {
     let lead = null;
     let back = null;
+    const minGap = v.bike ? 0.6 : 1.5;
     for (const o of v.edge.occ[t]) {
       if (o.v === v) continue;
       if (o.s > v.s) {
@@ -979,12 +983,12 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     }
     if (lead) {
       const gap = lead.s - lead.v.half - v.s - v.half;
-      if (gap < 1.5 || freeAcc(v) + brake(v, gap, lead.v.speed) < bSafe) return false;
+      if (gap < minGap || freeAcc(v) + brake(v, gap, lead.v.speed) < bSafe) return false;
     }
     if (back) {
       const f = back.v;
       const gap = v.s - v.half - back.s - f.half;
-      if (gap < 1.5 || freeAcc(f) + brake(f, gap, v.speed) < bSafe) return false;
+      if (gap < minGap || freeAcc(f) + brake(f, gap, v.speed) < bSafe) return false;
     }
     const off = v.edge.lanes[t] - v.edge.lanes[v.lane] - v.dl;
     const reach = v.half + player.halfL + 6;
@@ -1003,6 +1007,27 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
   // Fastest v can take curve c at without exceeding the sideways acceleration its driver accepts
   const bendSpeed = (v, c) => Math.sqrt(v.driver.aLat / Math.max(c.curv, 1e-3));
 
+  // A bike with a vehicle in its lane ahead or alongside rides beside it, within the lane, instead of waiting behind it
+  function bikeSidestep(v) {
+    const e = v.edge;
+    let blocker = null;
+    for (const o of e.occ[v.lane]) {
+      if (o.v === v || o.v.bus) continue;
+      if (o.s - o.v.half - 12 < v.s && o.s + o.v.half + v.half + 1.5 > v.s && (!blocker || o.s < blocker.s)) blocker = o;
+    }
+    if (!blocker) {
+      v.off = 0;
+      return;
+    }
+    const canRight = v.lane + 1 < e.lanes.length;
+    const canLeft = v.lane > 0;
+    let dir = canRight && (!canLeft || v.slot % 2) ? 1 : -1;
+    const bo = blocker.v.off || 0;
+    if (blocker.v.bike && bo !== 0) dir = bo > 0 ? -1 : 1; // pass a bike on its other side
+    const mag = blocker.v.bike ? 0.8 : 1.35;
+    if (!v.off || Math.abs(v.off) !== mag) v.off = dir * mag;
+  }
+
   // IDM acceleration for vehicles ahead in the lane (and, through the intersection, in the lane it leads to),
   // the stop line while v may not go, a red beyond, the player, and slowing down for turns and give-way lines
   function accelerate(v) {
@@ -1011,8 +1036,9 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     let cap = Infinity;
     v.gap = Infinity;
     if (!v.conn) {
-      worst = follow(v, e.occ[v.lane], v.s);
-      const side = straddle(v);
+      worst = follow(v, e.occ[v.lane], v.s, v.bike);
+      if (v.bike) bikeSidestep(v);
+      const side = v.bike && v.off ? 0 : straddle(v);
       if (side) worst = Math.min(worst, follow(v, e.occ[v.lane + side], v.s));
       const d = e.len - v.s - v.half;
       if (d < LOOKAHEAD) {
@@ -1095,7 +1121,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
   function drive(v, dt) {
     v.laneTimer -= dt;
     if (v.laneTimer <= 0) {
-      v.laneTimer = 0.4 + Math.random() * 0.3;
+      v.laneTimer = (v.bike ? 0.15 : 0.4) + Math.random() * 0.3;
       changeLanes(v);
     }
     accelerate(v);
@@ -1124,7 +1150,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     // way into a lane change a driver edges over
     const maxLat = Math.min(1.7, 0.3 + (v.bus ? 0.1 : 0.22) * v.speed);
     const rate = Math.min(1.8, Math.max(v.speed, 1.5) / (v.axle + v.half));
-    const target = clamp(-rate * v.dl, -maxLat, maxLat);
+    const target = clamp(-rate * (v.dl - (v.off || 0)), -maxLat, maxLat);
     v.dlv += clamp(target - v.dlv, -2.5 * dt, 2.5 * dt);
     v.dl += v.dlv * dt;
   }
