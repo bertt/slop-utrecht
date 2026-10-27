@@ -124,6 +124,18 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
     for (const p of peds) if (p.placed) atCurb(p);
   }
 
+  // Whether a spot already has a crowd around it
+  const CROWD_RADIUS = 6;
+  const CROWD_MAX = 2; // others within CROWD_RADIUS before a spot counts as crowded
+  function crowdedAt(self, x, z) {
+    let n = 0;
+    for (const q of peds) {
+      if (q === self || !q.placed) continue;
+      if (Math.abs(q.x - x) < CROWD_RADIUS && Math.abs(q.z - z) < CROWD_RADIUS && ++n > CROWD_MAX) return true;
+    }
+    return false;
+  }
+
   // Try crosswalks first for crossing pedestrians, then fall back to sidewalks if no suitable crossing fits.
   function spawnPed(p, rMin, rMax, protectView) {
     for (let attempt = 0; attempt < 10; attempt++) {
@@ -142,6 +154,7 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
       if (d < rMin || d > rMax || (protectView && nearView(x, z, 2, PED_SPAWN_DISTANCE))) continue;
       if (player.active && Math.hypot(x - player.x, z - player.z) < 10) continue;
       if (crosswalk && track.node.curb.some((q) => Math.hypot(q.x - x, q.z - z) < QUEUE_GAP)) continue;
+      if (crowdedAt(p, x, z)) continue; // spread out: not into an existing crowd
       if (p.conversation) endConversation(p.conversation);
       Object.assign(p, track);
       p.t = t;
