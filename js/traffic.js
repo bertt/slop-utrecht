@@ -361,7 +361,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
   const white = new THREE.Color(1, 1, 1);
   const bikes = [];
   for (let i = 0; i < NUM_BIKES; i++) {
-    const bike = createVehicle(false, 0.9, 0.3, 0.55, BIKE_DRIVER, 4.5 + (i % 5) * 0.65);
+    const bike = createVehicle(false, 0.9, 0.3, 0.55, BIKE_DRIVER, 3 + Math.random() * 7);
     bike.bike = true;
     bike.slot = i;
     bikes.push(bike);
