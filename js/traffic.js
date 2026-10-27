@@ -655,7 +655,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
   function follow(v, list, s, skipCars = false) {
     let o = ahead(list, s, v);
     // bikes filter past slower cars in their own lane (alongside, see bikeSidestep) rather than queue behind them
-    if (skipCars) while (o && !o.v.bus) o = ahead(list, o.s, v);
+    if (skipCars) while (o) o = ahead(list, o.s, v);
     if (!o) return 0;
     const gap = o.s - o.v.half - s - v.half;
     if (gap > LOOKAHEAD) return 0;
@@ -910,6 +910,12 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
       }
       return false;
     }
+    if (v.bike) {
+      // bikes wait for nothing: no lights, crossing traffic, pedestrians or room
+      v.out = j;
+      v.yielding = false;
+      return true;
+    }
     if (!v.isPolice && (phase === 'red' || (phase === 'amber' && stoppable))) return false;
     if (boxBusy(n, e.axisIndex)) return false; // crossing traffic inside
     const lead = ahead(e.occ[v.lane], v.s, v);
@@ -1012,7 +1018,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     const e = v.edge;
     let blocker = null;
     for (const o of e.occ[v.lane]) {
-      if (o.v === v || o.v.bus) continue;
+      if (o.v === v) continue;
       if (o.s - o.v.half - 12 < v.s && o.s + o.v.half + v.half + 1.5 > v.s && (!blocker || o.s < blocker.s)) blocker = o;
     }
     if (!blocker) {
@@ -1024,7 +1030,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     let dir = canRight && (!canLeft || v.slot % 2) ? 1 : -1;
     const bo = blocker.v.off || 0;
     if (blocker.v.bike && bo !== 0) dir = bo > 0 ? -1 : 1; // pass a bike on its other side
-    const mag = blocker.v.bike ? 0.8 : 1.35;
+    const mag = blocker.v.bike ? 0.8 : blocker.v.bus ? 1.8 : 1.35;
     if (!v.off || Math.abs(v.off) !== mag) v.off = dir * mag;
   }
 
@@ -1050,7 +1056,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
         if (!go) {
           worst = Math.min(worst, stopAt(v, d));
         } else {
-          worst = Math.min(worst, follow(v, f.occ[j], vs), signalAhead(v, f, f.len - vs - v.half));
+          worst = Math.min(worst, follow(v, f.occ[j], vs, v.bike), v.bike ? 0 : signalAhead(v, f, f.len - vs - v.half));
           // pulling in to wait inside: slow down for that spot already if it will have to wait there
           if (v.yielding && holdsOn(v, pedsOut(v, d + c.len - 3))) worst = Math.min(worst, stopAt(v, d + v.half + v.yieldAt, 0.5));
         }
@@ -1066,7 +1072,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     } else {
       const f = v.move.to;
       const vs = v.cs - v.conn.len;
-      worst = Math.min(follow(v, f.occ[v.out], vs), follow(v, e.occ[v.lane], e.len + v.cs), signalAhead(v, f, f.len - vs - v.half));
+      worst = Math.min(worst, follow(v, f.occ[v.out], vs, v.bike), follow(v, e.occ[v.lane], e.len + v.cs, v.bike), v.bike ? 0 : signalAhead(v, f, f.len - vs - v.half));
       // someone crossing the way out: wait for them inside the intersection, short of the 2.5 m crosswalk
       const d = v.conn.len - 3 - v.cs - v.half;
       const peds = pedsOut(v, d);
@@ -1074,7 +1080,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
         worst = Math.min(worst, stopAt(v, v.yieldAt - v.cs, 0.5)); // waiting inside to turn
       } else {
         if (v.yielding) cross(v);
-        if (peds) worst = Math.min(worst, stopAt(v, d, 0.5));
+        if (peds && !v.bike) worst = Math.min(worst, stopAt(v, d, 0.5));
       }
       cap = bendSpeed(v, v.conn);
     }
