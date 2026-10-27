@@ -6,6 +6,9 @@ A simulation of the inner city of Utrecht built with [three.js](https://threejs.
 
 Based on [Slop New York](https://github.com/mrdoob/slop-newyork) by mrdoob.
 
+<img width="1123" height="874" alt="image" src="https://github.com/user-attachments/assets/ca3701ca-caa4-4f04-ac4d-a4575fb637f7" />
+
+
 ## Make it your own
 
 Fork it, remix it, improve it, break it. Make games, animations, films, experiments, or something completely different. Use it as a starting point and take it wherever you want. Have fun!
