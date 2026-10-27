@@ -1629,7 +1629,7 @@ class ThirdPersonControllerManager {
   }
 
   isUnbridgedWater(x, z) {
-    return typeof waterAt === 'function' && waterAt(x, z) && !roadCrossesWater(x, z, this.activeMode === 'person');
+    return typeof waterAt === 'function' && waterAt(x, z) && !roadCrossesWater(x, z, this.activeMode !== 'helicopter');
   }
 
   getGroundHeight(x, z, mode = 'person') {

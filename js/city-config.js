@@ -104,7 +104,7 @@ function roadCrossesWater(x, z, anyRoad = false) {
       if (!anyRoad && !s.r.bridge) continue;
       const dx = s.bx - s.ax, dz = s.bz - s.az;
       const t = Math.max(0, Math.min(1, ((x - s.ax) * dx + (z - s.az) * dz) / (dx * dx + dz * dz || 1e-9)));
-      if (Math.hypot(s.ax + t * dx - x, s.az + t * dz - z) < (s.r.w || 3) / 2 + 1) return true;
+      if (Math.hypot(s.ax + t * dx - x, s.az + t * dz - z) < (s.r.w || 3) / 2 + (anyRoad ? 1.8 : 1)) return true;
     }
   }
   return false;

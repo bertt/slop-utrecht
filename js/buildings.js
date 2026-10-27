@@ -46,7 +46,7 @@ import { GEO } from './nyc-geodata.js';
 import { fdrViaduct, pavedPlazaRects, parkTreeSites, sidewalkBlocks } from './city-grid.js';
 import { utrechtPoints, utrechtBounds, utrechtPolygonGeometry, nearestUtrechtRoad, utrechtSpatialGroups, utrechtGeometryGroups } from './utrecht-geometry.js';
 import { createShopSigns } from './shop-signs.js';
-import { wallCrossings } from './passages.js';
+import { solidWallSpans } from './passages.js';
 import { LANDMARK_EXCLUSIONS, LANDMARK_SOURCE_EXCLUSIONS } from './landmarks.js';
 
 // Building massing follows each block's lots and frontage frames. Footprints combine non-overlapping boxes.
@@ -2022,16 +2022,9 @@ function buildCityBlocks(scene, { bag = false } = {}) {
           if (!bag) buckets[matIndex].push({ x, y: base + (eave - base) / 2 + 0.02, z, w: length + 0.06, h: eave - base, d: thickness,
             ry, tone, facadeColour, facadeLevels: source.facadeLevels, faces: [WALL_KINDS.blankStone, WALL_KINDS.blankStone, face, face] });
           if (base < 1) {
-            // Walkways crossing the wall open a 2.8 m gap (passages and arcades), the rest of the wall stays solid
+            // Walkways crossing the wall open a 2.8 m gap (passages and arcades), and so does a road running right along it; the rest stays solid
             const cs = Math.cos(ry), sn = Math.sin(ry), hz = thickness / 2;
-            const gapHalf = 1.4 / length;
-            let from = 0;
-            const spans = [];
-            for (const t of wallCrossings(a.x, a.z, b.x, b.z)) {
-              if (t - gapHalf > from) spans.push([from, t - gapHalf]);
-              from = Math.max(from, t + gapHalf);
-            }
-            if (from < 1) spans.push([from, 1]);
+            const spans = solidWallSpans(a.x, a.z, b.x, b.z, 1.4 / length);
             for (const [t0, t1] of spans) {
               const segLen = (t1 - t0) * length;
               if (segLen < 0.2) continue;
