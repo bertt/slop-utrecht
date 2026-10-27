@@ -897,7 +897,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     if (v.commit === n) return true;
     if (v.move.out[v.lane] < 0) {
       // missed the lane for the planned move: go wherever this lane goes instead
-      if (d > 12) return false;
+      if (d > 12 && !v.bike) return false;
       v.move = chooseMove(v, true);
     }
     const m = v.move;
@@ -1062,7 +1062,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
         }
         // easing off to fall in behind a vehicle from another lane merging ahead into the same lane (unless committed:
         // then the others wait for v)
-        const o = c && !v.claimed && mergingAhead(v, f, j);
+        const o = c && !v.bike && !v.claimed && mergingAhead(v, f, j);
         if (o) worst = Math.min(worst, Math.max(-v.driver.b, brake(v, o.s - o.v.half - vs - v.half, o.v.speed)));
         let vt = c ? bendSpeed(v, c) : Infinity;
         const cautious = e.to.signal ? v.isPolice && phaseOf(e) !== 'green' : e.axisIndex !== 0;
