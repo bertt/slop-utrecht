@@ -5,6 +5,7 @@ const test = require('node:test');
 const { loadModule } = require('./helpers/module.cjs');
 
 const source = readFileSync(join(__dirname, '../js/controllers.js'), 'utf8');
+const polygonCollision = loadModule(readFileSync(join(__dirname, '../js/building-collision.js'), 'utf8'));
 
 function eventTarget() {
   const listeners = new Map();
@@ -33,10 +34,12 @@ function keyboardHarness(nyc = {}) {
       'three/webgpu': {},
       './city-config.js': config,
       './tsl-materials.js': {},
-      './actor-models.js': {},
+      './cars.js': {},
+      './helicopter.js': {},
       './pedestrians.js': {},
       './vehicle-lights.js': {},
-      './landmarks.js': {}
+      './landmarks.js': {},
+      './building-collision.js': polygonCollision
     }
   });
   // Exercise the production event handlers without constructing the scene's 3D models.
@@ -564,6 +567,27 @@ test('teleports use oriented building footprints without rejecting clear corners
     controller.resolveHorizontalCollision(ent.position, mode === 'helicopter' ? 4.5 : mode === 'person' ? 0.48 : 0.65,
       mode === 'car' ? ent : null);
     assert.deepEqual([ent.position.x, ent.position.z], before);
+  }
+});
+
+test('movement and teleports preserve polygon courtyards and avoid their actual walls', () => {
+  const points = (values) => values.map(([x, z]) => ({ x, z }));
+  const collider = { minX: 0, maxX: 30, minZ: 0, maxZ: 30, maxY: 200, polygon: {
+    outer: points([[0, 0], [30, 0], [30, 30], [0, 30]]),
+    holes: [points([[5, 5], [25, 5], [25, 25], [5, 25]])]
+  } };
+  for (const mode of ['person', 'car', 'cyclist', 'helicopter']) {
+    const { controller, ent } = teleportHarness(mode, [{ ...collider }]);
+    assert.deepEqual({ ...controller.teleportActiveTo(15, 15, 0) }, { x: 15, z: 15 });
+    const radius = mode === 'helicopter' ? 4.5 : mode === 'person' ? 0.48 : 0.65;
+    controller.resolveHorizontalCollision(ent.position, radius, mode === 'car' ? ent : null);
+    assert.deepEqual([ent.position.x, ent.position.z], [15, 15]);
+    ent.position.x = 5.1;
+    controller.resolveHorizontalCollision(ent.position, radius, mode === 'car' ? ent : null);
+    const resolved = [ent.position.x, ent.position.z];
+    assert.ok(ent.position.x > 5.1, 'wall contact moves back into the courtyard');
+    controller.resolveHorizontalCollision(ent.position, radius, mode === 'car' ? ent : null);
+    assert.deepEqual([ent.position.x, ent.position.z], resolved, 'one resolution clears the wall');
   }
 });
 

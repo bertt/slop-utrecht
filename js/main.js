@@ -29,16 +29,28 @@ async function initApp() {
   const loadingStatus = document.getElementById('loading-status');
   const loadingTrack = loadingOverlay ? loadingOverlay.querySelector('.loader-track') : null;
   const loadingFill = document.getElementById('loading-progress');
-  // The loading bar sweeps while the city is being built (the main thread is busy) and fills as the shaders compile
+  // Only shader compilation has measurable progress; other stages use the sweeping bar.
   const setLoadingProgress = (p) => {
     if (!loadingFill) return;
     if (loadingTrack) loadingTrack.classList.remove('is-indeterminate');
     loadingFill.style.transform = `scaleX(${Math.min(1, Math.max(0, p))})`;
   };
 
-  if (loadingStatus) {
-    loadingStatus.textContent = 'Getting the city ready…';
+  async function showLoadingStage(message) {
+    if (loadingStatus) loadingStatus.textContent = message;
+    if (loadingTrack) loadingTrack.classList.add('is-indeterminate');
+    if (document.hidden) return;
+    // Let the label paint before synchronous work. The timeout also lets hidden tabs keep loading.
+    await new Promise((resolve) => {
+      const timeout = setTimeout(resolve, 100);
+      requestAnimationFrame(() => {
+        clearTimeout(timeout);
+        setTimeout(resolve, 0);
+      });
+    });
   }
+
+  await showLoadingStage('Initializing graphics...');
 
   // 1. Initialize Three.js WebGPURenderer with 32-bit float reversedDepthBuffer
   const renderer = new THREE.WebGPURenderer({
@@ -68,21 +80,21 @@ async function initApp() {
   container.dataset.threeRevision = THREE.REVISION;
 
   // 2. Scene, atmosphere and lighting
+  await showLoadingStage('Creating sky and environment lighting...');
   const scene = new THREE.Scene();
   const lightingSystem = new LightingSystem(scene, renderer);
   markInit('lighting');
 
-  if (loadingStatus) {
-    loadingStatus.textContent = 'Opening the streets…';
-  }
-
   // 3. Build Manhattan Geography, Iconic Landmarks, Blocks, Street Details & Traffic
+  await showLoadingStage('Building streets, parks and waterfronts...');
   const cityGrid = buildCityGrid(scene);
   markInit('cityGrid');
-      const { colliders: landmarkColliders } = buildLandmarks(scene);
+  await showLoadingStage('Building landmarks...');
+  const { colliders: landmarkColliders } = buildLandmarks(scene);
   markInit('landmarks');
   // Real 3D BAG building volumes; the OSM-extruded buildings remain the fallback when the tiles can't be loaded.
   let bagBuildings = null;
+  await showLoadingStage('Loading 3D BAG buildings...');
   try {
     bagBuildings = await loadBagBuildings(scene, {
       onProgress: (done, total) => { if (loadingStatus) loadingStatus.textContent = `Loading 3D BAG buildings ${done}/${total}…`; }
@@ -91,12 +103,15 @@ async function initApp() {
     console.warn('[bag3d] falling back to OSM buildings:', error);
   }
   markInit('bag3d');
+  await showLoadingStage('Generating building facades...');
   const cityBlocks = buildCityBlocks(scene, { bag: !!bagBuildings });
   markInit('blocks');
   const allColliders = [...landmarkColliders, ...cityBlocks.colliders, ...(cityGrid.colliders || [])];
 
+  await showLoadingStage('Placing trees, streetlights and street furniture...');
   const streetDetails = buildStreetDetails(scene, allColliders);
   markInit('streetDetails');
+  await showLoadingStage('Creating traffic and pedestrian routes...');
   // Buildings turned along non-grid streets have oriented colliders whose world bounds reach past their lots: they stay
   // inside the property line anyway, so the road network (lanes & sidewalks) doesn't need them.
   // Elevated building sections that clear even a bus don't obstruct ground traffic.
@@ -107,10 +122,12 @@ async function initApp() {
   ], streetDetails.signalIntersections);
   markInit('traffic');
   const highwayTraffic = createHighwayTraffic(scene, cityGrid.highwayLanes);
+  await showLoadingStage('Adding road markings...');
   buildRoadPaint(scene, trafficSystem.network);
   markInit('roadPaint');
 
   // 4. Initialize Third-Person Controllers (Person, Car, Cyclist, Cargo Bike, Helicopter) & Multi-Camera System
+  await showLoadingStage('Preparing player, vehicles and controls...');
   const controllerManager = new ThirdPersonControllerManager(scene, allColliders);
   // Reuse teleport placement so saved players return at rest, close to their last positions.
   try {
@@ -161,6 +178,7 @@ async function initApp() {
 
   // Island-wide static geometry: chunk & distance-cull the small props, shadow stand-ins for the big casters
   // (scene-culling.js)
+  await showLoadingStage('Preparing scene visibility and shadows...');
   const cullingRoots = ['UtrechtCityGrid', 'UtrechtCityBlocks', 'UtrechtStreetDetails', 'ManhattanLandmarks', 'UtrechtBoundaryContext']
     .map((name) => scene.getObjectByName(name))
     .filter(Boolean);
@@ -193,6 +211,7 @@ async function initApp() {
 
   // 5. TSL RenderPipeline with Half-Res Screen Space Reflections (SSRNode), Bloom & Filmic Toning
   //    Fade out distant and matte surfaces so SSR spends its rays on visible glossy reflections.
+  await showLoadingStage('Setting up visual effects, map and interface...');
   const scenePass = pass(scene, cameraSystem.camera);
   // The multisampled colour attachments (output, normal, metalRough) only need resolving, never storing: discarding
   // them spares the GPU writing 3 x 4 samples per pixel to memory every frame (transient, memoryless attachments where
@@ -580,17 +599,12 @@ async function initApp() {
   if (document.fonts) document.fonts.ready.then(placeModeIndicator);
   markInit('ui');
 
-  // The loading screen stays up while the shaders compile (precompileShaders() & the warm-up frame, see the loop) and
-  // until the first frame is on screen
-  if (loadingStatus) {
-    loadingStatus.textContent = 'Bringing Utrecht to life…';
-  }
-
   // Compile shaders behind the loading screen. Overlapping compileAsync() jobs keep compilation moving
   // while individual jobs yield to the browser.
   const COMPILE_POOL = 16;
   const nextTask = () => (globalThis.scheduler?.yield ? globalThis.scheduler.yield() : new Promise((resolve) => setTimeout(resolve, 0)));
   async function precompileShaders() {
+    await showLoadingStage('Preparing reflections and bloom...');
     // An empty frame first: it sets up the post-processing chain, which configures the scene pass's render target
     // (MSAA samples, depth format), so the pipelines compiled below are the very ones the scene pass asks for
     scene.visible = false;
@@ -630,6 +644,8 @@ async function initApp() {
       job.push(o);
     });
 
+    await showLoadingStage(`Compiling scene shaders... 0 / ${jobs.length} batches`);
+    setLoadingProgress(0);
     renderer.setRenderTarget(scenePass.renderTarget);
     renderer.setMRT(sceneMRT);
     const compile = async (object) => {
@@ -650,8 +666,7 @@ async function initApp() {
         for (const object of job) await compile(object);
         done++;
         if (loadingStatus) {
-          const message = done < jobs.length * 0.75 ? 'Bringing Utrecht to life…' : 'Your ride is almost ready…';
-          if (loadingStatus.textContent !== message) loadingStatus.textContent = message;
+          loadingStatus.textContent = `Compiling scene shaders... ${done} / ${jobs.length} batches (${Math.round((done / jobs.length) * 100)}%)`;
         }
         setLoadingProgress(done / jobs.length);
       }
@@ -664,6 +679,7 @@ async function initApp() {
 
   await precompileShaders();
   markInit('compile');
+  await showLoadingStage('Preparing shadows and the first frame...');
 
   // 6. Animation Loop
   let lastTime = performance.now();
@@ -736,6 +752,7 @@ async function initApp() {
       // The loading screen stays up until the GPU has got through the first frame (and the pipelines its warm-up
       // compiled), i.e. until the city is actually on screen
       const device = renderer.backend.device;
+      if (loadingStatus) loadingStatus.textContent = 'Waiting for graphics to finish the first frame...';
       Promise.resolve(device && device.queue.onSubmittedWorkDone()).catch(() => {}).then(() => {
         markInit('gpu');
         console.log(`[init] ${initTimings.join(', ')}`);

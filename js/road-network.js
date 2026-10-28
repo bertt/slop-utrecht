@@ -9,6 +9,7 @@ import {
   sidewalkAt
 } from './city-config.js';
 import { GEO } from './nyc-geodata.js';
+import { polygonBoxOverlaps } from './building-collision.js';
 
 // Drivable road graph derived from the ground layout that city-grid.js actually builds: avenue corridors
 // between the raised curbs, cross-street gaps between curb rows, lanes that keep clear of medians, plazas
@@ -49,7 +50,8 @@ function buildRoadNetwork(sidewalks, obstacles, signalIntersections = []) {
         const list = hash.get(cellKey(ix, iz));
         if (!list) continue;
         for (const r of list) {
-          if (r.minX < maxX && r.maxX > minX && r.minZ < maxZ && r.maxZ > minZ && overlapsFootprint(r,minX,maxX,minZ,maxZ) && fn(r)) return true;
+          if (r.minX < maxX && r.maxX > minX && r.minZ < maxZ && r.maxZ > minZ && overlapsFootprint(r,minX,maxX,minZ,maxZ) && fn(r)
+            && (!r.polygon || polygonBoxOverlaps(r.polygon, (minX + maxX) / 2, (minZ + maxZ) / 2, (maxX - minX) / 2, (maxZ - minZ) / 2))) return true;
         }
       }
     }

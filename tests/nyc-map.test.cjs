@@ -6,6 +6,27 @@ const { loadModule } = require('./helpers/module.cjs');
 
 const source = readFileSync(join(__dirname, '../js/nyc-map.js'), 'utf8');
 
+test('surveyed building courtyards remain holes in the map footprint layer', () => {
+  class Path2D {
+    rings = [];
+    moveTo(x, z) { this.rings.push([[x, z]]); }
+    lineTo(x, z) { this.rings.at(-1).push([x, z]); }
+    closePath() {}
+  }
+  const { footprintLayers } = loadModule(source + '\nexport { footprintLayers };', {
+    globals: { Path2D },
+    imports: { './nyc-geodata.js': { GEO: {} }, './city-config.js': { ROADS: [] } }
+  });
+  const ring = (x0, z0, x1, z1) => [{ x: x0, z: z0 }, { x: x1, z: z0 }, { x: x1, z: z1 }, { x: x0, z: z1 }];
+  const layers = footprintLayers([{ footprints: [{ h: 120, pts: ring(0, 0, 20, 20), holes: [ring(5, 5, 15, 15)] }] }]);
+  const [tile] = layers.tones[2].tiles.values();
+  const areas = tile.path.rings.map((r) => r.reduce((sum, p, i) => {
+    const q = r[(i + 1) % r.length];
+    return sum + p[0] * q[1] - q[0] * p[1];
+  }, 0) / 2);
+  assert.deepEqual(areas, [400, -100], 'opposite winding cuts the courtyard out under the nonzero fill rule');
+});
+
 for (const [width, height, dpr] of [[500, 300, 1], [320, 180, 1.5], [1920, 1080, 2]]) {
   test(`map clicks match rendered world positions at ${width}x${height}, DPR ${dpr}`, () => {
     const window = { innerWidth: width, innerHeight: height, devicePixelRatio: dpr };

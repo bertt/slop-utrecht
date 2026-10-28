@@ -552,16 +552,27 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
   }
 
   // Every rig's gait advances every frame; only those the camera may see (or whose shadow it may see) solve their
-  // bone transforms and are drawn, the far ones with the light LOD.
+  // bone transforms and are drawn, the far ones with the light LOD. Walkers also begin turning towards the next leg
+  // of their route over its last metre so the body rounds corners instead of swinging about on the spot.
   function renderPed(p, dt) {
     const draw = !hasView || visible(p.x, p.z, 7);
     const partner = p.conversation && (p.conversation.a === p ? p.conversation.b : p.conversation.a);
     const sideStep = p.dodgeTarget - p.dodge;
     const diveTime = clock - p.diveStart;
     const diving = diveTime < PEDESTRIAN_DIVE_DURATION;
+    let fx = p.ux * p.dir, fz = p.uz * p.dir;
+    const ahead = p.dir > 0 ? p.len - p.t : p.t, leg = p.nextRoute?.[p.nextLeg];
+    if (leg && ahead < 1 && p.v >= 0.3) {
+      const nx = leg.track.ux * leg.dir, nz = leg.track.uz * leg.dir;
+      if (fx * nx + fz * nz >= -0.9) {
+        const w = 0.5 * (1 - ahead);
+        fx += (nx - fx) * w;
+        fz += (nz - fz) * w;
+      }
+    }
     const heading = diving ? p.diveHeading : partner ? Math.atan2(partner.x - p.x, partner.z - p.z)
       : Math.abs(sideStep) > 0.01 ? Math.atan2(p.uz * Math.sign(sideStep), -p.ux * Math.sign(sideStep))
-      : Math.atan2(p.ux * p.dir, p.uz * p.dir);
+      : Math.atan2(fx, fz);
     p.rig.update(dt, p.x, p.z, heading, pedGround, p, 0, draw, diving ? diveTime : -1);
     if (!draw) return;
     pedCrowd.add(p.rig, Math.hypot(p.x - focusX, p.z - focusZ));

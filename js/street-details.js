@@ -544,6 +544,7 @@ function buildStreetDetails(scene, colliders = []) {
     }
     inst.instanceMatrix.needsUpdate = true;
     group.add(inst);
+    return inst;
   }
 
   addMatrixArrayInstanced(unitCyl, poleMetalMat, poleMatrices);
@@ -556,7 +557,14 @@ function buildStreetDetails(scene, colliders = []) {
   addMatrixArrayInstanced(walkPanelGeo, walkSignalGlow, walkBoxMatrices, false);
   addMatrixArrayInstanced(lampHousingGeo, poleMetalMat, lampHeadMatrices);
   addMatrixArrayInstanced(lampLensGeo, lampBulbGlow, lampHeadMatrices, false);
-  addMatrixArrayInstanced(pedLampPostGeo, poleMetalMat, pedPostMatrices);
+  const pedPosts = addMatrixArrayInstanced(pedLampPostGeo, poleMetalMat, pedPostMatrices);
+  // ~28k posts: they cast as 4-sided base + shaft (16 triangles instead of 120; scene-culling.js shadow stand-ins)
+  if (pedPosts) {
+    pedPosts.userData.shadowStandIn = mergeGeometries([
+      new THREE.CylinderGeometry(0.12, 0.18, 0.85, 4, 1, true).translate(0, 0.425, 0),
+      new THREE.CylinderGeometry(0.072, 0.094, 2.85, 4, 1, true).translate(0, 2.275, 0)
+    ]);
+  }
   addMatrixArrayInstanced(pedGlobeGeo, pedGlobeGlow, pedPostMatrices, false);
   for (const [name, matrices] of utrechtSignMatrices) {
     const mat = new THREE.MeshStandardNodeMaterial({ map: createStreetSignBladeTexture(name), roughness: 0.6 });
@@ -1054,7 +1062,12 @@ function buildStreetDetails(scene, colliders = []) {
   pitCurbInst.instanceMatrix.needsUpdate = true;
   pitSoilInst.instanceMatrix.needsUpdate = true;
   pitGrateInst.instanceMatrix.needsUpdate = true;
-  for (const pit of [pitCurbInst, pitSoilInst, pitGrateInst]) pit.computeBoundingSphere();
+  // Their footprint would keep these 20 cm boxes drawn at any distance (scene-culling.js): culled with the cross-street
+  // trees over them instead (trees.js MAX_DIST)
+  for (const pit of [pitCurbInst, pitSoilInst, pitGrateInst]) {
+    pit.computeBoundingSphere();
+    pit.userData.cullDistance = 950;
+  }
   if (sidewalkTreePositions.length) group.add(pitCurbInst, pitSoilInst);
   if (gratedTrees.length) group.add(pitGrateInst);
 

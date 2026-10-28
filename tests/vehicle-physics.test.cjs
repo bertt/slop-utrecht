@@ -184,7 +184,7 @@ function trafficHarness(vehicles) {
     clamp: (value, lo, hi) => Math.max(lo, Math.min(hi, value)),
     shove(v, dx, dz) { v.x += dx; v.z += dz; },
     reportCollision() {}, spawnCollisionSparks() {}, changeLanes() {},
-    accelerate(v) { v.acc = -3; }, enter() {}, leave() {} };
+    accelerate(v) { v.acc = -3; }, steer() {}, enter() {}, leave() {} };
   for (const name of ['readTrafficBody', 'writeTrafficVelocity', 'impactSuspension', 'collideWithPlayer', 'collideTraffic', 'drive']) {
     const source = trafficSource.match(new RegExp(`  function ${name}\\([^]*?\\n  \\}`))?.[0];
     assert.ok(source, name);
@@ -196,7 +196,7 @@ function trafficHarness(vehicles) {
 function trafficCar(z, speed = 0, impactTime = 0) {
   return { x: 0, z, prevX: 0, prevZ: z, yaw: 0, yawOffset: 0, yawRate: 0, yawVel: 0,
     half: 2.25, halfWidth: 0.86, tx: 0, tz: 1, speed, vx: 0, vz: 0, impactTime, pitchVel: 0, rollVel: 0,
-    edge: { len: 100 }, s: z, conn: null, axle: 1.38, dl: 0, dlv: 0,
+    edge: { len: 100 }, s: z, conn: null, axle: 1.38, dl: 0, dlv: 0, nose: 0,
     laneTimer: 10, gap: Infinity, leaderSpeed: 0, wait: 0 };
 }
 

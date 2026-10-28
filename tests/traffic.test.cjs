@@ -8,16 +8,19 @@ const source = ['traffic.js', 'pedestrian-system.js']
   .map((file) => readFileSync(join(__dirname, '../js', file), 'utf8')).join('\n');
 // Exercise the production lane query and player snapshot without creating the WebGPU scene.
 const laneQuery = source.match(/  function playerInLane\(lane, pl\) \{[\s\S]*?\n  \}/)?.[0];
+const boxRun = source.match(/const HWY_BOX_RUN = \d+;/)?.[0];
 const playerSnapshot = source.match(/    const pl = entity[\s\S]*?\n    \} : null;/)?.[0];
 assert.ok(laneQuery, 'traffic lane query is present');
+assert.ok(boxRun, 'traffic lane bounds run length is present');
 assert.ok(playerSnapshot, 'traffic player snapshot is present');
-const { playerInLane, snapshot } = vm.runInNewContext(`
+const { playerInLane, snapshot, HWY_BOX_RUN } = vm.runInNewContext(`
+  ${boxRun}
   ${laneQuery}
   function snapshot(entity, mode) {
     ${playerSnapshot}
     return pl;
   }
-  ({ playerInLane, snapshot });
+  ({ playerInLane, snapshot, HWY_BOX_RUN });
 `);
 
 function lane(points) {
@@ -26,12 +29,14 @@ function lane(points) {
     const a = points[i - 1], b = points[i];
     cum.push(cum[i - 1] + Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z));
   }
-  return {
-    pts: points,
-    cum,
-    box: [Math.min(...points.map((p) => p.x)), Math.max(...points.map((p) => p.x)),
-      Math.min(...points.map((p) => p.z)), Math.max(...points.map((p) => p.z))]
-  };
+  // Bounds per run of HWY_BOX_RUN segments, as createHighwayTraffic lays them out
+  const box = [];
+  for (let s = 0; s + 1 < points.length; s += HWY_BOX_RUN) {
+    const run = points.slice(s, Math.min(points.length, s + HWY_BOX_RUN + 1));
+    box.push(Math.min(...run.map((p) => p.x)), Math.max(...run.map((p) => p.x)),
+      Math.min(...run.map((p) => p.z)), Math.max(...run.map((p) => p.z)));
+  }
+  return { pts: points, cum, box };
 }
 
 function player(x, y, z, mode = 'car') {
@@ -71,6 +76,19 @@ test('sloped lanes use horizontal projection and compare interpolated road heigh
   assert.equal(playerInLane(road, player(50, 0, 0)), null);
   assert.equal(playerInLane(road, player(100.1, 7.6, 0)), null);
   assert.equal(playerInLane(road, player(50, 3.8, 2.001)), null);
+});
+
+test('long lanes find the player in any run of segments and ignore players inside their overall bounds', () => {
+  // A U-shaped lane (up one shore, back down the other) with many segments: its overall bounds cover the middle
+  const pts = [];
+  for (let i = 0; i <= 40; i++) pts.push({ x: 0, y: 0, z: i * 10 });
+  for (let i = 0; i <= 40; i++) pts.push({ x: 200, y: 0, z: 400 - i * 10 });
+  const road = lane(pts);
+  assert.ok(road.box.length > 4, 'the lane is bounded in several runs');
+  const late = playerInLane(road, player(200, 0, 55));
+  close(late.u, road.cum[75] + 5);
+  close(playerInLane(road, player(0, 0, 333)).u, 333);
+  assert.equal(playerInLane(road, player(100, 0, 200)), null);
 });
 
 test('overlapping road segments select the matching elevation', () => {
@@ -258,4 +276,146 @@ test('crossing pedestrians fall back to a sidewalk when nearby crosswalks are un
   assert.equal(crossings, 5);
   assert.equal(ped.node, null);
   assert.equal(ped.z, 210);
+});
+
+// Drivers dodging the player: late, as people do, and committed to whatever they do
+function dodgeHarness({ isRoadClear = (x) => Math.abs(x) <= 6.65 } = {}) {
+  const context = {
+    AVOID_NOTICE: 1.8, AVOID_HOLD: 1.2, clock: 0,
+    threat: { ahead: 0, aside: 0, across: 0 },
+    player: { active: true, x: 0, z: 0, vx: 0, vz: 0, fx: 0, fz: 1, halfW: 0.86, halfL: 2.18 },
+    network: { isRoadClear }
+  };
+  for (const name of ['threatTime', 'swerveRoom', 'react']) context[name] = trafficFunction(name, context);
+  // a car heading +z (its right is -x) in the middle of the road
+  const car = { x: 0, z: 0, tx: 0, tz: 1, yaw: 0, speed: 12, half: 2.25, halfL: 2.18, halfWidth: 0.86, dl: 0,
+    impactTime: 0,
+    evade: 0, alarm: 0, panicUntil: 0, panicAcc: 0, reaction: 0.8 };
+  // the player at (x, z) heading `heading` at `speed`, the car on at its speed, for `seconds` at 60 Hz
+  const step = (x, z, heading, speed, seconds) => {
+    for (let k = 0; k < seconds * 60; k++) {
+      Object.assign(context.player, { x, z, fx: Math.sin(heading), fz: Math.cos(heading),
+        vx: Math.sin(heading) * speed, vz: Math.cos(heading) * speed });
+      context.react(car, 1 / 60);
+      context.clock += 1 / 60;
+      car.z += car.speed / 60;
+      x += Math.sin(heading) * speed / 60;
+      z += Math.cos(heading) * speed / 60;
+    }
+    return { x, z };
+  };
+  return { context, car, step };
+}
+
+test('drivers notice a player about to hit them only shortly before, and react later still', () => {
+  const { context, car, step } = dodgeHarness();
+  // head-on at 12 + 14 m/s from 60 m: 2.1 s to impact, noticed 1.8 s before (after 0.3 s), acted on 0.8 s later
+  let p = step(0, 60, Math.PI, 14, 0.3);
+  assert.equal(car.alarm, 0, 'not noticed yet');
+  p = step(p.x, p.z, Math.PI, 14, 0.7);
+  assert.ok(car.alarm > 0 && car.panicUntil === 0, 'noticed, not reacting yet');
+  step(p.x, p.z, Math.PI, 14, 0.2);
+  assert.ok(car.panicUntil > 0, 'reacting, about a second before impact');
+  assert.ok(Math.abs(context.threatTime(car) - 0.95) < 0.15);
+});
+
+test('a driver about to be hit head-on brakes and swerves; hit from behind, it floors it instead of braking', () => {
+  const head = dodgeHarness();
+  head.step(0, 40, Math.PI, 14, 1.2);
+  assert.equal(head.car.panicAcc, -1);
+  assert.equal(head.car.evade, 2.2, 'to the right, the player coming straight at it');
+  const rear = dodgeHarness();
+  rear.step(0.5, -25, 0, 26, 1.2);
+  assert.equal(rear.car.panicAcc, 1);
+  assert.equal(rear.car.evade, 2.2, 'right, away from the player coming up on its left (+x)');
+});
+
+test('drivers swerve behind a player crossing their way, and to the side with room', () => {
+  // crossing from the car's left (+x) to its right: swerving left, behind the player
+  const cross = dodgeHarness();
+  cross.step(25, 25, -Math.PI / 2, 12, 1.2);
+  assert.ok(cross.car.evade < 0);
+  // head-on with the curb close on its right (-x): left it is
+  const curb = dodgeHarness({ isRoadClear: (x) => x >= -2.55 && x <= 8 });
+  curb.step(0, 40, Math.PI, 14, 1.2);
+  assert.equal(curb.car.evade, -2.2);
+});
+
+test('drivers commit to their manoeuvre whatever the player does then', () => {
+  const { car, step } = dodgeHarness();
+  let p = step(0, 40, Math.PI, 14, 1.2);
+  const { evade, panicAcc } = car;
+  assert.ok(evade !== 0);
+  // the player swerves the same way: the driver keeps on
+  p = step(p.x - 3, p.z, Math.PI, 14, 0.3);
+  assert.equal(car.evade, evade);
+  assert.equal(car.panicAcc, panicAcc);
+});
+
+test('a player passing in the next lane or going away is no threat', () => {
+  const { context, car } = dodgeHarness();
+  Object.assign(context.player, { x: -3.6, z: -10, vx: 0, vz: 20, fx: 0, fz: 1 });
+  assert.equal(context.threatTime(car), Infinity);
+  Object.assign(context.player, { x: 0, z: 10, vx: 0, vz: 20 });
+  assert.equal(context.threatTime(car), Infinity);
+});
+
+// Steering: cars turn only as fast as their front wheels turn them, the wheels as fast as a person turns them
+function steeringHarness() {
+  const consts = ['CAR_DRIVER', 'BUS_DRIVER'].map((name) => source.match(new RegExp(`^const ${name} = .*$`, 'm'))?.[0])
+    .concat(['bendA', 'bendB', 'at'].map((name) => source.match(new RegExp(`^  const ${name} = .*$`, 'm'))?.[0]));
+  assert.ok(consts.every(Boolean), 'steering constants are present');
+  const context = { clamp: (x, lo, hi) => Math.max(lo, Math.min(hi, x)), connector() {}, curvePoint() {} };
+  vm.runInNewContext(consts.join('\n').replace(/^\s*const /gm, 'var '), context);
+  for (const name of ['steer', 'previewPoint', 'lanePoint', 'pathPoint', 'locate']) {
+    context[name] = trafficFunction(name, context);
+  }
+  const edge = { sx: 0, sz: 0, dx: 0, dz: 1, rx: -1, rz: 0, len: 5000, lanes: [-1.8, 1.8] };
+  const car = (speed, extra = {}) => {
+    const v = { half: 2.25, axle: 1.38, driver: context.CAR_DRIVER, edge, lane: 0, s: 10, conn: null, trail: null,
+      speed, dl: 0, dlv: 0, delta: 0, evade: 0, yaw: 0, nose: 0, yawRate: 0, yawVel: 0, tx: 0, tz: 1, x: 0, z: 0,
+      move: { out: [0, 1], to: null }, ...extra };
+    context.locate(v);
+    return v;
+  };
+  // drive v on for `seconds` at 60 Hz, as drive() moves it along its path; the fastest it turns and turns the wheel
+  const run = (v, seconds) => {
+    let yawRate = 0, wheelRate = 0;
+    for (let k = 0; k < seconds * 60; k++) {
+      const { yaw, delta } = v;
+      v.s += v.speed * Math.cos(v.nose) / 60;
+      context.steer(v, 1 / 60);
+      context.locate(v);
+      yawRate = Math.max(yawRate, Math.abs(v.yaw - yaw) * 60);
+      wheelRate = Math.max(wheelRate, Math.abs(v.delta - delta) * 60);
+    }
+    return { yawRate, wheelRate };
+  };
+  return { context, car, run };
+}
+
+test('a lane change is steered: the car turns only as fast as its wheels let it, and settles in its lane', () => {
+  const { context, car, run } = steeringHarness();
+  const v = car(12, { dl: 3.6 }); // (just changed lanes: 3.6 m right of its new lane's centre)
+  const { yawRate, wheelRate } = run(v, 6);
+  assert.ok(wheelRate <= context.CAR_DRIVER.steerRate + 1e-9, `wheel turned at ${wheelRate}`);
+  assert.ok(yawRate * 12 <= 1.3 * context.CAR_DRIVER.aLat + 0.05, `turned at ${yawRate} rad/s`);
+  assert.ok(Math.abs(v.dl) < 0.1 && Math.abs(v.yaw) < 0.02, 'in its lane, heading down it');
+});
+
+test('a panicking driver yanks the wheel, but the car still turns only as fast as the tyres grip', () => {
+  const { context, car, run } = steeringHarness();
+  const v = car(12, { evade: -2.2 });
+  const { yawRate, wheelRate } = run(v, 1.5);
+  assert.ok(wheelRate <= 2.5 * context.CAR_DRIVER.steerRate + 1e-9);
+  assert.ok(yawRate * 12 <= context.CAR_DRIVER.grip + 0.05, `turned at ${yawRate} rad/s`);
+  assert.ok(v.dl < -1.5, 'well out of the way after 1.5 s');
+});
+
+test('a standing car does not turn, however far it is off its line', () => {
+  const { car, run } = steeringHarness();
+  const v = car(0, { dl: 2 });
+  run(v, 2);
+  assert.equal(v.yaw, 0);
+  assert.equal(v.dl, 2);
 });

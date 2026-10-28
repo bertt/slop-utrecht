@@ -11,10 +11,10 @@
   <script type="importmap">
     {
       "imports": {
-        "three": "https://cdn.jsdelivr.net/gh/mrdoob/three.js@f17eb5d689094a3fbd4cd0d64d54729a48036ce0/build/three.webgpu.js",
-        "three/webgpu": "https://cdn.jsdelivr.net/gh/mrdoob/three.js@f17eb5d689094a3fbd4cd0d64d54729a48036ce0/build/three.webgpu.js",
-        "three/tsl": "https://cdn.jsdelivr.net/gh/mrdoob/three.js@f17eb5d689094a3fbd4cd0d64d54729a48036ce0/build/three.tsl.js",
-        "three/addons/": "https://cdn.jsdelivr.net/gh/mrdoob/three.js@f17eb5d689094a3fbd4cd0d64d54729a48036ce0/examples/jsm/"
+        "three": "https://cdn.jsdelivr.net/gh/mrdoob/three.js@b3396270682287470d161658ac01084d25e8dba6/build/three.webgpu.js",
+        "three/webgpu": "https://cdn.jsdelivr.net/gh/mrdoob/three.js@b3396270682287470d161658ac01084d25e8dba6/build/three.webgpu.js",
+        "three/tsl": "https://cdn.jsdelivr.net/gh/mrdoob/three.js@b3396270682287470d161658ac01084d25e8dba6/build/three.tsl.js",
+        "three/addons/": "https://cdn.jsdelivr.net/gh/mrdoob/three.js@b3396270682287470d161658ac01084d25e8dba6/examples/jsm/"
       }
     }
   </script>
@@ -25,7 +25,11 @@
   <link rel="modulepreload" href="./js/city-config.js" />
   <link rel="modulepreload" href="./js/tsl-materials.js" />
   <link rel="modulepreload" href="./js/trees.js" />
-  <link rel="modulepreload" href="./js/actor-models.js" />
+  <link rel="modulepreload" href="./js/building-collision.js" />
+  <link rel="modulepreload" href="./js/vehicles.js" />
+  <link rel="modulepreload" href="./js/cars.js" />
+  <link rel="modulepreload" href="./js/bus.js" />
+  <link rel="modulepreload" href="./js/helicopter.js" />
   <link rel="modulepreload" href="./js/vehicle-lights.js" />
   <link rel="modulepreload" href="./js/vehicle-physics.js" />
   <link rel="modulepreload" href="./js/pedestrians.js" />
@@ -102,7 +106,7 @@
       <img class="loader-logo" src="./assets/logo-gemeente-utrecht.svg" alt="Gemeente Utrecht" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'mta-bullet loader-bullet',textContent:'U'}))" />
       <div class="loader-title">Slop Utrecht</div>
       <div class="loader-track is-indeterminate" aria-hidden="true"><span id="loading-progress" class="loader-fill"></span></div>
-      <div id="loading-status">Initializing WebGPURenderer &amp; TSL Shaders...</div>
+      <div id="loading-status">Loading city code and data...</div>
     </div>
   </div>
 

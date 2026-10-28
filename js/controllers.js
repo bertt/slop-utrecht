@@ -16,15 +16,19 @@ import {
   buildCarGeometry,
   buildCarSidePatch,
   buildSteerableWheelGeo,
-  createLoftedCarMaterial,
+  carTipZ,
+  createLoftedCarMaterial
+} from './cars.js';
+import {
   buildHelicopterBodyGeometry,
   buildHelicopterMainRotorGeometry,
   buildHelicopterTailRotorGeometry,
   createLoftedHelicopterMaterial
-} from './actor-models.js';
+} from './helicopter.js';
 import { PersonCrowd, PersonRig } from './pedestrians.js';
 import { HEADLIGHTS, createVehicleHeadlight, placeVehicleHeadlight } from './vehicle-lights.js';
 import { bryantParkLawn } from './landmarks.js';
+import { polygonContact } from './building-collision.js';
 
 // js/controllers.js
 // Sculpted, non-blocky GTA 6-style 3D models, animations, and physics controllers
@@ -291,11 +295,12 @@ function collisionBody(mode, radius, heading, margin = 0) {
   };
 }
 
-// Shared by movement and teleport clearance. World bounds reject distant boxes cheaply; the narrow phase
-// uses a circle for walking/cycling/flying and all four separating axes for an oriented car rectangle.
+// Movement and teleports share exact footprint checks after rejecting distant bounds.
+// Walking/cycling/flying use circles; cars use oriented rectangles.
 function buildingContact(c, x, y, z, body, contact) {
   if (y + body.bottom >= c.maxY || y + body.top <= (c.minY ?? 0)) return false;
   if (x + body.extX <= c.minX || x - body.extX >= c.maxX || z + body.extZ <= c.minZ || z - body.extZ >= c.maxZ) return false;
+  if (c.polygon) return polygonContact(c.polygon, x, z, body, contact);
   const o = c.obb;
   const cs = o ? o.cs : 1, sn = o ? o.sn : 0;
   const hx = o ? o.hx : (c.maxX - c.minX) * 0.5;
@@ -371,6 +376,8 @@ function createTaxiDoorDecalTexture() {
   ctx.fillText('TAXI UTRECHT', 112, 90);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
+  // The decals are mostly seen at grazing angles from the chase camera
+  tex.anisotropy = 16;
   return tex;
 }
 
@@ -395,6 +402,7 @@ function createNYLicensePlateTexture() {
   ctx.fillText('GX-123-B', 143, 80);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 16;
   return tex;
 }
 
@@ -724,16 +732,16 @@ class ThirdPersonControllerManager {
       chassisPivot.add(decal);
     }
 
-    // 3. High-Detail Dutch yellow license plates on the bumpers
+    // 3. High-Detail Dutch yellow license plates on the bumpers, tilted to follow the fascias
     const nyPlateTex = createNYLicensePlateTexture();
     const nyPlateMat = new THREE.MeshStandardNodeMaterial({ map: nyPlateTex, roughness: 0.28 });
-    const rearPlate = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.14, 0.02), nyPlateMat);
-    rearPlate.position.set(0, spec.plates[1], spec.zRear - 0.006);
-    chassisPivot.add(rearPlate);
-
-    const frontPlate = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.14, 0.02), nyPlateMat);
-    frontPlate.position.set(0, spec.plates[0], spec.zFront + 0.006);
-    chassisPivot.add(frontPlate);
+    for (const front of [true, false]) {
+      const y = spec.plates[front ? 0 : 1];
+      const plate = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.14, 0.008), nyPlateMat);
+      plate.position.set(0, y, carTipZ(spec, y, front) + (front ? 0.003 : -0.003));
+      plate.rotation.x = Math.atan((carTipZ(spec, y + 0.07, front) - carTipZ(spec, y - 0.07, front)) / 0.14);
+      chassisPivot.add(plate);
+    }
 
     // 3b. Brake, reverse & turn lights are lit by the taxi material from its carState uniform (see updateCar)
     const carState = taxiLoftMat.userData.carState;

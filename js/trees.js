@@ -1,5 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { createTreeMaterial } from './tsl-materials.js';
+import { polygonBoxOverlaps } from './building-collision.js';
 
 // Seeded street and park trees with three geometry levels, regrouped by spatial cell as the camera moves.
 // Bark tubes and leaf cards share a material; atlas mipmaps preserve leaf coverage at a distance.
@@ -839,6 +840,8 @@ function createTreeClearance(colliders) {
         for (const c of cells.get(`${x},${z}`) || []) {
           if (min.y >= c.maxY || max.y <= (c.minY ?? 0)
             || min.x >= c.maxX || max.x <= c.minX || min.z >= c.maxZ || max.z <= c.minZ) continue;
+          if (c.polygon && !polygonBoxOverlaps(c.polygon, (min.x + max.x) / 2, (min.z + max.z) / 2,
+            (max.x - min.x) / 2, (max.z - min.z) / 2)) continue;
           if (c.obb) {
             const o = c.obb;
             const dx = (min.x + max.x) * 0.5 - o.cx, dz = (min.z + max.z) * 0.5 - o.cz;
