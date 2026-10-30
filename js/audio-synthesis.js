@@ -204,13 +204,11 @@ function chainBuffer(context) {
 
 function sirenSweepWave(context) {
   const real = new Float32Array(25), imaginary = new Float32Array(25);
-  // Electronic wail/yelp circuits use a nearly triangular control voltage, with softened turning points.
+  // Dutch two-tone (tatü-tata) siren: the control voltage alternates between two pitches with softened edges.
   for (let harmonic = 1; harmonic < real.length; harmonic++) {
     for (let i = 0; i < 512; i++) {
       const phase = i / 512;
-      const ramp = phase < 0.46 ? phase / 0.46 : (1 - phase) / 0.54;
-      const triangle = 2 * ramp - 1;
-      const value = triangle * 0.88 + Math.sin(triangle * Math.PI / 2) * 0.12;
+      const value = Math.tanh(Math.sin(2 * Math.PI * phase) * 6);
       real[harmonic] += value * Math.cos(2 * Math.PI * harmonic * phase) / 256;
       imaginary[harmonic] += value * Math.sin(2 * Math.PI * harmonic * phase) / 256;
     }
@@ -530,9 +528,9 @@ export function createMotorVoice(context, resources, kind, output) {
       noiseRate((0.9 + Math.min(1, movement) * 0.2) * doppler, now);
     };
   } else {
-    const siren = oscillator(resources.sirenWave, 1125);
-    const highpass = filter('highpass', 480, 0.7);
-    const hornBody = filter('peaking', 1750, 1.1);
+    const siren = oscillator(resources.sirenWave, 507);
+    const highpass = filter('highpass', 300, 0.7);
+    const hornBody = filter('peaking', 1300, 1.1);
     hornBody.gain.value = 3.5;
     const hornFilter = filter('lowpass', 4200, 0.65);
     const sirenGain = gain();
@@ -551,16 +549,14 @@ export function createMotorVoice(context, resources, kind, output) {
     const hornFrequency = smoothParameter(hornBody.frequency, 0.12, 1);
     render = (speed, load, doppler, now) => {
       const pitch = (0.98 + variation * 0.04) * doppler;
-      sirenFrequency(1125 * pitch, now);
-      sweepRange(425 * pitch, now);
-      // Hold a long wail, then briefly select yelp. Different cars switch independently; the oscillator
-      // keeps its phase through a change, and Doppler shifts both the pitch and the sweep cadence.
-      const yelp = (now + variation * 24) % 24 >= 19;
-      sweepFrequency((yelp ? 3 : 0.2) * (0.97 + variation * 0.06) * doppler, now);
+      // Alternate between ~435 Hz and ~580 Hz; Doppler shifts both the pitch and the switching cadence.
+      sirenFrequency(507 * pitch, now);
+      sweepRange(72 * pitch, now);
+      sweepFrequency(0.95 * (0.97 + variation * 0.06) * doppler, now);
       sirenLevel(0.09, now);
-      envelopeLevel(0.01, now);
+      envelopeLevel(0, now);
       sirenCutoff(4200 * doppler, now);
-      hornFrequency(1750 * doppler, now);
+      hornFrequency(1300 * doppler, now);
     };
   }
 
