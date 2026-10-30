@@ -10,7 +10,7 @@ const { addBuildingDetails } = loadModule(readFileSync(join(__dirname, '../js/bu
 });
 const ring = points => points.map(([x, z]) => ({ x, z }));
 const square = (x, z, size) => ring([[x, z], [x + size, z], [x + size, z + size], [x, z + size]]);
-const building = (outer, holes = []) => ({ cx: 20, cz: 20, height: 24, polygons: [{ outer, holes }] });
+const building = (outer, holes = []) => ({ cx: 20, cz: 20, height: 24, storefronts: true, polygons: [{ outer, holes }] });
 const random = seed => () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296);
 function details(b, seed = 1, neighbours = [b], rand = random(seed)) {
   const result = { cornices: [], waterTowers: [], hvacUnits: [], awnings: [], scaffoldSheds: [] };
@@ -78,6 +78,19 @@ test('roof accessories avoid a taller overlapping building section', () => {
     }
   }
   assert.ok(checked > 5);
+});
+
+test('non-retail buildings lose shop awnings but retain rooftop details and construction sheds', () => {
+  const b = building(square(0, 0, 40));
+  let sheds = 0;
+  for (let seed = 1; seed <= 40; seed++) {
+    const retail = details(b, seed * 104729);
+    const residential = details({ ...b, storefronts: false }, seed * 104729);
+    assert.equal(residential.awnings.length, 0);
+    for (const key of ['cornices', 'waterTowers', 'hvacUnits']) assert.deepEqual(residential[key], retail[key]);
+    sheds += residential.scaffoldSheds.length;
+  }
+  assert.ok(sheds > 0);
 });
 
 test('seeded decoration is deterministic, bounded and leaves surveyed geometry untouched', () => {

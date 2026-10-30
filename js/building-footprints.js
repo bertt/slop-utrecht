@@ -48,7 +48,8 @@ function createBuildingFootprints(material, records, getNeighbours) {
           if (width === 0) continue;
           const offset = cell.positions.length / 3;
           const adjacentHeight = !i && neighbours.length ? partyWallHeight(record, a, b, neighbours) : 0;
-          const kind = i ? WALL_KINDS.rear : adjacentHeight ? WALL_KINDS.lotLine : WALL_KINDS.shop;
+          const kind = i ? WALL_KINDS.rear : adjacentHeight ? WALL_KINDS.lotLine
+            : record.storefronts ? WALL_KINDS.shop : WALL_KINDS.front;
           const exposedHeight = adjacentHeight ? Math.max(0, top - adjacentHeight) : height;
           // Match the positive-world-axis tangent used by the shared interior-map view ray.
           const reverse = (Math.abs(dz) >= Math.abs(dx) ? dz : dx) < 0;
@@ -68,7 +69,7 @@ function createBuildingFootprints(material, records, getNeighbours) {
         cell.positions.push(p.x, top, p.y);
         cell.normals.push(0, 1, 0);
         cell.boxes.push(1, height, height, seed);
-        cell.walls.push(0, 0, WALL_KINDS.shop);
+        cell.walls.push(0, 0, WALL_KINDS.front);
       }
       for (const [a, b, c] of triangles) cell.indices.push(offset + a, offset + c, offset + b);
     }

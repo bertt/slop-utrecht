@@ -43,42 +43,98 @@ function polygonContact(polygon, x, z, body, contact) {
     const { hx, hz, cos, sin } = body;
     if (!polygonBoxOverlaps(polygon, x, z, hx, hz, cos, sin)) return false;
     if (!contact) return true;
-    let best = Infinity, vx = 0, vz = 0;
-    const tryPush = (dx, dz) => {
+    let best = Infinity, outNx = 0, outNz = 0;
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    const tryDir = (ux, uz, dist) => {
+      if (!(dist >= 0) || dist >= best || !Number.isFinite(ux + uz)) return;
+      const step = dist + 1e-6;
+      if (polygonBoxOverlaps(polygon, x + ux * step, z + uz * step, hx, hz, cos, sin)) return;
+      best = dist; outNx = ux; outNz = uz;
+    };
+    const pushSigned = (ux, uz, s) => {
+      if (s >= -1e-9) tryDir(ux, uz, Math.max(0, s));
+      if (s <= 1e-9) tryDir(-ux, -uz, Math.max(0, -s));
+    };
+    const tryVec = (dx, dz) => {
       const length = Math.hypot(dx, dz);
-      if (length < 1e-10 || length >= best) return;
-      const scale = (length + 1e-6) / length;
-      if (polygonBoxOverlaps(polygon, x + dx * scale, z + dz * scale, hx, hz, cos, sin)) return;
-      best = length; vx = dx; vz = dz;
+      if (length > 0) tryDir(dx / length, dz / length, length);
     };
     // Whole-outline escape candidates avoid the internal seams of triangulated colliders.
     for (let r = -1; r < polygon.holes.length; r++) {
       const ring = r < 0 ? polygon.outer : polygon.holes[r];
-      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const n = ring.length;
+      if (n === 0) continue;
+      let prevNx = 0, prevNz = 0, prevSup = 0, hasPrev = false;
+      for (let k = n - 1; k >= 0; k--) {
+        const p0 = ring[k], p1 = ring[(k + 1) % n];
+        const len0 = Math.hypot(p1.x - p0.x, p1.z - p0.z);
+        if (len0 > 0) {
+          prevNx = -(p1.z - p0.z) / len0;
+          prevNz = (p1.x - p0.x) / len0;
+          prevSup = Math.abs(prevNx * cos - prevNz * sin) * hx + Math.abs(prevNx * sin + prevNz * cos) * hz;
+          hasPrev = true;
+          break;
+        }
+      }
+      for (let i = 0, j = n - 1; i < n; j = i++) {
         const a = ring[j], b = ring[i];
+        if (a.x < minX) minX = a.x;
+        if (a.x > maxX) maxX = a.x;
+        if (a.z < minZ) minZ = a.z;
+        if (a.z > maxZ) maxZ = a.z;
         const dx = a.x - x, dz = a.z - z;
         const ex = b.x - a.x, ez = b.z - a.z, length = Math.hypot(ex, ez);
         if (length > 0) {
           const nx = -ez / length, nz = ex / length;
           const d = dx * nx + dz * nz;
           const support = Math.abs(nx * cos - nz * sin) * hx + Math.abs(nx * sin + nz * cos) * hz;
-          tryPush(nx * (d + support), nz * (d + support));
-          tryPush(nx * (d - support), nz * (d - support));
+          pushSigned(nx, nz, d + support);
+          pushSigned(nx, nz, d - support);
+          if (hasPrev) {
+            const det = prevNx * nz - prevNz * nx;
+            if (Math.abs(det) > 1e-6) {
+              const d0 = dx * prevNx + dz * prevNz;
+              for (const s0 of [-prevSup, prevSup]) {
+                const c0 = d0 + s0;
+                for (const s1 of [-support, support]) {
+                  const c1 = d + s1;
+                  tryVec((c0 * nz - c1 * prevNz) / det, (prevNx * c1 - nx * c0) / det);
+                }
+              }
+            }
+          }
+          prevNx = nx; prevNz = nz; prevSup = support; hasPrev = true;
         }
         const u = dx * cos - dz * sin, v = dx * sin + dz * cos;
-        tryPush((u + hx) * cos, -(u + hx) * sin);
-        tryPush((u - hx) * cos, -(u - hx) * sin);
-        tryPush((v + hz) * sin, (v + hz) * cos);
-        tryPush((v - hz) * sin, (v - hz) * cos);
+        pushSigned(cos, -sin, u + hx);
+        pushSigned(cos, -sin, u - hx);
+        pushSigned(sin, cos, v + hz);
+        pushSigned(sin, cos, v - hz);
+        for (const su of [-hx, hx]) {
+          const du = u + su;
+          for (const sv of [-hz, hz]) {
+            const dv = v + sv;
+            tryVec(du * cos + dv * sin, -du * sin + dv * cos);
+          }
+        }
         const d = Math.hypot(dx, dz);
         if (d > 0) {
           const support = (Math.abs(u) * hx + Math.abs(v) * hz) / d;
-          tryPush(dx * (1 + support / d), dz * (1 + support / d));
-          tryPush(dx * (1 - support / d), dz * (1 - support / d));
+          pushSigned(dx / d, dz / d, d + support);
+          pushSigned(dx / d, dz / d, d - support);
         }
       }
     }
-    contact.nx = vx / best; contact.nz = vz / best; contact.depth = best + 1e-6;
+    if (!Number.isFinite(best) && minX <= maxX) {
+      const extX = Math.abs(cos) * hx + Math.abs(sin) * hz;
+      const extZ = Math.abs(sin) * hx + Math.abs(cos) * hz;
+      pushSigned(1, 0, maxX + extX - x);
+      pushSigned(1, 0, minX - extX - x);
+      pushSigned(0, 1, maxZ + extZ - z);
+      pushSigned(0, 1, minZ - extZ - z);
+    }
+    if (!Number.isFinite(best)) return false;
+    contact.nx = outNx; contact.nz = outNz; contact.depth = best + 1e-6;
     return true;
   }
 
@@ -88,8 +144,12 @@ function polygonContact(polygon, x, z, body, contact) {
     // A concave corner may touch two walls. Resolve both before returning one combined push.
     for (let i = 0; i < 4; i++) {
       if (!circleContact(polygon, x + dx, z + dz, body.radius, contact)) {
-        contact.depth = Math.hypot(dx, dz); contact.nx = dx / contact.depth; contact.nz = dz / contact.depth;
-        return true;
+        const depth = Math.hypot(dx, dz);
+        if (depth > 0) {
+          contact.depth = depth; contact.nx = dx / depth; contact.nz = dz / depth;
+          return true;
+        }
+        break;
       }
       dx += contact.nx * (contact.depth + 1e-6); dz += contact.nz * (contact.depth + 1e-6);
     }
@@ -112,7 +172,7 @@ function circleContact(polygon, x, z, radius, contact) {
       if (d < distance) { distance = d; nx = qx; nz = qz; edgeX = dx; edgeZ = dz; }
     }
   }
-  if (!inside && distance >= radius) return false;
+  if (!Number.isFinite(distance) || (!inside && distance >= radius)) return false;
   if (contact) {
     if (distance > 1e-10) {
       const sign = inside ? -1 : 1;

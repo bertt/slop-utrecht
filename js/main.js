@@ -123,7 +123,7 @@ async function initApp() {
   markInit('traffic');
   const highwayTraffic = createHighwayTraffic(scene, cityGrid.highwayLanes);
   await showLoadingStage('Adding road markings...');
-  buildRoadPaint(scene, trafficSystem.network);
+  buildRoadPaint(scene, trafficSystem.network, cityGrid.roadPaint);
   markInit('roadPaint');
 
   // 4. Initialize Third-Person Controllers (Person, Car, Cyclist, Cargo Bike, Helicopter) & Multi-Camera System
@@ -179,7 +179,7 @@ async function initApp() {
   // Island-wide static geometry: chunk & distance-cull the small props, shadow stand-ins for the big casters
   // (scene-culling.js)
   await showLoadingStage('Preparing scene visibility and shadows...');
-  const cullingRoots = ['UtrechtCityGrid', 'UtrechtCityBlocks', 'UtrechtStreetDetails', 'ManhattanLandmarks', 'UtrechtBoundaryContext']
+  const cullingRoots = ['UtrechtCityGrid', 'UtrechtCityBlocks', 'UtrechtStreetDetails', 'ManhattanLandmarks', 'UtrechtBoundaryContext', 'RoadMarkings']
     .map((name) => scene.getObjectByName(name))
     .filter(Boolean);
   setupSceneCulling(scene, cullingRoots, lightingSystem.sunLight.shadow);
@@ -699,7 +699,7 @@ async function initApp() {
 
     // Update 3rd-person controllers, camera, signals, traffic & vehicle collisions, building LODs, and dynamic shadow focus
     gamepadControls.update(dt);
-    controllerManager.update(dt, elapsed);
+    controllerManager.update(dt, elapsed, cameraSystem.initialized ? cameraSystem.currentPos : null);
     cameraSystem.update(dt, elapsed);
     streetDetails.signalClock.value = elapsed;
     trafficSystem.update(

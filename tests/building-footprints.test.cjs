@@ -39,13 +39,13 @@ const THREE = {
 };
 const collision = loadModule(readFileSync(join(__dirname, '../js/building-collision.js'), 'utf8'));
 const { createBuildingFootprints } = loadModule(readFileSync(join(__dirname, '../js/building-footprints.js'), 'utf8'), {
-  imports: { 'three/webgpu': THREE, './tsl-materials.js': { WALL_KINDS: { shop: 0, rear: 2, lotLine: 3 } },
+  imports: { 'three/webgpu': THREE, './tsl-materials.js': { WALL_KINDS: { shop: 0, front: 1, rear: 2, lotLine: 3 } },
     './building-collision.js': collision }
 });
 const p = (x, z) => ({ x, z });
 const square = (x = 0) => [p(x, 0), p(x + 10, 0), p(x + 10, 10), p(x, 10)];
 const record = (outer, extra = {}) => {
-  const b = { polygons: [{ outer, holes: [] }], height: 60, seed: 123, tone: 0.75, ...extra };
+  const b = { polygons: [{ outer, holes: [] }], height: 60, seed: 123, tone: 0.75, storefronts: true, ...extra };
   const points = b.polygons.flatMap(p => p.outer);
   b.cx = (Math.min(...points.map(p => p.x)) + Math.max(...points.map(p => p.x))) / 2;
   b.cz = (Math.min(...points.map(p => p.z)) + Math.max(...points.map(p => p.z))) / 2;
@@ -132,6 +132,19 @@ const reserve = b => {
     z0: Math.min(...points.map(p => p.z)), z1: Math.max(...points.map(p => p.z)) };
 };
 const wallKinds = mesh => Array.from({ length: 4 }, (_, i) => mesh.geometry.attributes.facadeWall.array[i * 12 + 2]);
+
+test('non-retail fronts keep their own treatment without changing courtyards or party walls', () => {
+  const b = record(square(), { polygons: [{ outer: square(), holes: [[p(3, 3), p(7, 3), p(7, 7), p(3, 7)]] }] });
+  const neighbours = () => [reserve(record(square(10), { height: 12 }))];
+  const retail = build([b], neighbours).children[0].geometry;
+  const residential = build([{ ...b, storefronts: false }], neighbours).children[0].geometry;
+  for (let i = 0; i < 32; i++) {
+    const kind = retail.attributes.facadeWall.array[i * 3 + 2];
+    assert.equal(residential.attributes.facadeWall.array[i * 3 + 2], kind === 0 ? 1 : kind);
+  }
+  assert.deepEqual(residential.attributes.position.array, retail.attributes.position.array);
+  assert.deepEqual(residential.index, retail.index);
+});
 
 test('adjoining masonry walls are blank above lower roofs without adding triangles', () => {
   for (const angle of [0, 0.4]) for (const reversed of [false, true]) {

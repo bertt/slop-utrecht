@@ -2472,7 +2472,7 @@ function buildCityBlocks(scene, { bag = false } = {}) {
     let corniceCount = 0;
     let wtCount = 0;
     let hvacCount = 0;
-    fireEscapeSystem.begin();
+    fireEscapeSystem.begin(focusX, focusZ);
     let awningCount = 0;
     let shedCount = 0;
 

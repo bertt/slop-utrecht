@@ -150,12 +150,33 @@ function setupSceneCulling(scene, roots, shadow = null) {
   scene.updateMatrixWorld(true);
   const culled = [];
 
-  // 1. Small props: chunked & distance culled
+  // 1. Small props & pre-chunked decals: chunked & distance culled
   const chunkable = [];
   const largeMeshes = [];
+  const pushCulled = (mesh, sphere, cullDist) => {
+    const maxDist = cullDist + sphere.radius;
+    culled.push({
+      mesh,
+      x: sphere.center.x,
+      y: sphere.center.y,
+      z: sphere.center.z,
+      r: sphere.radius,
+      d: cullDist,
+      maxDistSq: maxDist * maxDist
+    });
+  };
   for (const root of roots) {
     root.traverse((o) => {
-      if (!o.isInstancedMesh || !isStaticMesh(o) || o.count < 64 || o.count !== o.instanceMatrix.count) return;
+      if (!isStaticMesh(o)) return;
+      if (!o.isInstancedMesh) {
+        if (o.userData.cullDistance > 0) {
+          if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
+          const sphere = o.geometry.boundingSphere.clone().applyMatrix4(o.matrixWorld);
+          pushCulled(o, sphere, o.userData.cullDistance);
+        }
+        return;
+      }
+      if (o.count < 64 || o.count !== o.instanceMatrix.count) return;
       if (o.count * triangleCount(o.geometry) < 40000) return;
       if (!o.boundingSphere) o.computeBoundingSphere();
       if (o.boundingSphere.radius < 1500) return;
@@ -174,7 +195,7 @@ function setupSceneCulling(scene, roots, shadow = null) {
     const cell = Math.min(600, Math.max(250, cullDist * 0.5));
     for (const chunk of replaceWithChunks(mesh, cell)) {
       const sphere = chunk.boundingSphere.clone().applyMatrix4(chunk.matrixWorld);
-      culled.push({ mesh: chunk, x: sphere.center.x, y: sphere.center.y, z: sphere.center.z, r: sphere.radius, d: cullDist });
+      pushCulled(chunk, sphere, cullDist);
     }
   }
 
@@ -334,7 +355,7 @@ function updateSceneCulling(cameraPosition) {
     const dx = c.x - x;
     const dy = c.y - y;
     const dz = c.z - z;
-    c.mesh.visible = Math.sqrt(dx * dx + dy * dy + dz * dz) - c.r < c.d;
+    c.mesh.visible = dx * dx + dy * dy + dz * dz < c.maxDistSq;
   }
 }
 

@@ -72,6 +72,56 @@ test('car contacts clear the whole outline without triangle seams at any heading
   assert.ok(contacts > 1000);
 });
 
+test('grazing walls, tight two-wall corners and degenerate polygons never produce NaN or through-wall pushes', () => {
+  // Sub-1e-10 m grazing contact on a long slightly tilted wall pushes back onto the street instead of across the block.
+  const tiltedWall = { outer: ring([[-50, -5e-11], [50, 5e-11], [50, 20], [-50, 20]]), holes: [] };
+  const graze = {};
+  assert.equal(polygonContact(tiltedWall, 0, -2.18, car(0), graze), true);
+  assert.ok(graze.nz < -0.99 && graze.depth < 1e-4, `expected tiny outward push, got ${JSON.stringify(graze)}`);
+  assert.equal(polygonContact(tiltedWall, graze.nx * graze.depth, -2.18 + graze.nz * graze.depth, car(0)), false);
+
+  // Two-wall inner courtyard corners resolve back into the courtyard for both axis-aligned and rotated cars.
+  for (const [angle, x, z, maxDepth] of [[0, 3.5, 4.8, 0.6], [0.5, 4.55, 5.075, 0.45]]) {
+    const body = car(angle);
+    const contact = {};
+    assert.equal(polygonContact(courtyard, x, z, body, contact), true);
+    assert.ok(contact.depth < maxDepth, `expected local corner push < ${maxDepth}, got ${contact.depth}`);
+    const rx = x + contact.nx * contact.depth, rz = z + contact.nz * contact.depth;
+    assert.ok(rx > 3 && rx < 9 && rz > 3 && rz < 9, 'car stays inside the courtyard');
+    assert.equal(polygonContact(courtyard, rx, rz, body), false);
+  }
+
+  // Narrow slots, sub-1e-10 slivers and malformed rings never yield Infinity or 0 * Infinity = NaN.
+  const narrowSlot = { outer: ring([[0, 0], [10, 0], [10, 10], [5.3, 10], [5.3, 2], [4.7, 2], [4.7, 10], [0, 10]]), holes: [] };
+  const slotContact = {};
+  assert.equal(polygonContact(narrowSlot, 5, 6, circle, slotContact), true);
+  assert.ok(Number.isFinite(slotContact.nx * slotContact.depth) && Number.isFinite(slotContact.nz * slotContact.depth));
+  assert.equal(polygonContact(narrowSlot, 5 + slotContact.nx * slotContact.depth, 6 + slotContact.nz * slotContact.depth, circle), false);
+
+  const sliver = { outer: ring([[0, 0], [4e-11, 0], [4e-11, 4e-11], [0, 4e-11]]), holes: [] };
+  const sliverContact = {};
+  assert.equal(polygonContact(sliver, 2e-11, 2e-11, { car: false, radius: 0 }, sliverContact), true);
+  assert.ok(Number.isFinite(sliverContact.nx * sliverContact.depth) && Number.isFinite(sliverContact.nz * sliverContact.depth));
+  assert.equal(polygonContact(sliver, 2e-11 + sliverContact.nx * sliverContact.depth, 2e-11 + sliverContact.nz * sliverContact.depth, { car: false, radius: 0 }), false);
+
+  const pointRing = { outer: ring([[0, 0], [0, 0]]), holes: [] };
+  const pointContact = {};
+  assert.equal(polygonContact(pointRing, 0, 0, car(0.3), pointContact), true);
+  assert.ok(Number.isFinite(pointContact.nx * pointContact.depth) && Number.isFinite(pointContact.nz * pointContact.depth));
+  assert.equal(polygonContact(pointRing, pointContact.nx * pointContact.depth, pointContact.nz * pointContact.depth, car(0.3)), false);
+  assert.equal(polygonContact(pointRing, 0, 0, circle, pointContact), false);
+
+  for (const bad of [
+    { outer: [], holes: [] },
+    { outer: ring([[NaN, NaN], [0, 0]]), holes: [] }
+  ]) {
+    const c = { nx: 1, nz: 0, depth: 1 };
+    assert.equal(polygonContact(bad, 0, 0, car(0.3), c), false);
+    assert.ok(Number.isFinite(c.nx * c.depth) && Number.isFinite(c.nz * c.depth));
+    assert.equal(polygonContact(bad, 0, 0, circle, c), false);
+  }
+});
+
 test('acoustic rays measure occupied wall thickness, leaving courtyards open', () => {
   const fraction = polygonSegmentFraction(courtyard, -2, 6, 16, 0, 0, 1);
   assert.equal(fraction * 16, 6);

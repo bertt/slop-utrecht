@@ -859,11 +859,11 @@ function createTreeClearance(colliders) {
 }
 
 /**
- * Builds the instanced tree field for `sites` ({ x, y, z, scale, species, yaw?, sx?, sz?, tier? }) and keeps each
- * tree's level of detail up to date from the camera of every view pass (scene.onBeforeRender). Returns
+ * Builds the instanced tree field for `sites` ({ x, y, z, scale, species, yaw?, sx?, sz?, tier? }). Call
+ * `update(cameraPosition)` from the frame loop to keep each tree's level of detail up to date. Returns
  * { group, material, atlas, sites (accepted placements), update(cameraPosition) }.
  */
-function createTreeField(scene, sites, colliders = []) {
+function createTreeField(_scene, sites, colliders = []) {
   const group = new THREE.Group();
   group.name = 'Trees';
   const atlas = createLeafAtlas();
@@ -892,7 +892,6 @@ function createTreeField(scene, sites, colliders = []) {
   const py = new Float32Array(capacity);
   const pz = new Float32Array(capacity);
   const meshOf = new Int32Array(capacity * 3); // mesh index per level
-  const cellOf = new Array(capacity);
   const tier = new Uint8Array(capacity);
   const lod = new Uint8Array(capacity).fill(255);
 
@@ -940,18 +939,20 @@ function createTreeField(scene, sites, colliders = []) {
     py[i] = (t.y || 0) + 6 * s;
     pz[i] = t.z;
     tier[i] = Math.min(2, t.tier || 0);
-    const key = Math.floor(t.x / TREE_CELL_SIZE) + ',' + Math.floor(t.z / TREE_CELL_SIZE);
-    let cell = cells.get(key);
+    const cellX = Math.floor(t.x / TREE_CELL_SIZE);
+    const cellZ = Math.floor(t.z / TREE_CELL_SIZE);
+    const cellKey = (cellX + 32768) * 65536 + (cellZ + 32768);
+    let cell = cells.get(cellKey);
     if (!cell) {
+      const label = `${cellX},${cellZ}`;
       const cellGroup = new THREE.Group();
-      cellGroup.name = `TreeCell_${key}`;
+      cellGroup.name = `TreeCell_${label}`;
       cellGroup.visible = false;
       group.add(cellGroup);
-      cell = { group: cellGroup, trees: [], meshes: new Map() };
-      cells.set(key, cell);
+      cell = { group: cellGroup, label, trees: [], meshes: new Map() };
+      cells.set(cellKey, cell);
     }
     cell.trees.push(i);
-    cellOf[i] = cell;
     const mi = meshIndex[sp];
     const treeTypes = [mi.l0[variant], mi.l1[variant], mi.l2[variant]];
     for (let l = 0; l < 3; l++) {
@@ -959,12 +960,56 @@ function createTreeField(scene, sites, colliders = []) {
       let index = cell.meshes.get(type);
       if (index === undefined) {
         index = meshes.length;
-        meshes.push({ type, cell, name: `${type.name}_${key}`, capacity: 0 });
+        meshes.push({ type, cell, name: `${type.name}_${cell.label}`, capacity: 0 });
         cell.meshes.set(type, index);
       }
       meshOf[i * 3 + l] = index;
       meshes[index].capacity++;
     }
+  });
+
+  // Finalize per-cell 3D bounding spheres, tier cutoffs, and typed index arrays for cell-hierarchical LOD checks.
+  const cellList = Array.from(cells.values(), (cell) => {
+    const trees = Int32Array.from(cell.trees);
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    let maxCutoffAloft = 0;
+    let minCutoffAloft = Infinity;
+    for (let k = 0; k < trees.length; k++) {
+      const i = trees[k];
+      const x = px[i], y = py[i], z = pz[i];
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+      if (z < minZ) minZ = z;
+      if (z > maxZ) maxZ = z;
+      const td = MAX_DIST[tier[i]];
+      if (td > maxCutoffAloft) maxCutoffAloft = td;
+      if (td < minCutoffAloft) minCutoffAloft = td;
+    }
+    const cx = (minX + maxX) * 0.5;
+    const cy = (minY + maxY) * 0.5;
+    const cz = (minZ + maxZ) * 0.5;
+    let maxR2 = 0;
+    for (let k = 0; k < trees.length; k++) {
+      const i = trees[k];
+      const dx = px[i] - cx, dy = py[i] - cy, dz = pz[i] - cz;
+      const r2 = dx * dx + dy * dy + dz * dz;
+      if (r2 > maxR2) maxR2 = r2;
+    }
+    cell.trees = trees;
+    cell.meshIndices = Int32Array.from(cell.meshes.values());
+    cell.cx = cx;
+    cell.cy = cy;
+    cell.cz = cz;
+    cell.radius = Math.sqrt(maxR2) + 1e-3;
+    cell.maxCutoffAloft = maxCutoffAloft;
+    cell.maxCutoffLow = Math.min(maxCutoffAloft, LOW_CUTOFF);
+    cell.minCutoffAloft = minCutoffAloft;
+    cell.minCutoffLow = Math.min(minCutoffAloft, LOW_CUTOFF);
+    cell.uniformLod = 255;
+    return cell;
   });
 
   const instanced = meshes.map((m) => {
@@ -995,18 +1040,42 @@ function createTreeField(scene, sites, colliders = []) {
   const dirtyCells = new Set();
   function rebuild() {
     for (const cell of dirtyCells) {
-      for (const mi of cell.meshes.values()) counts[mi] = 0;
-      for (const i of cell.trees) {
+      const mIndices = cell.meshIndices;
+      if (cell.uniformLod === 255) {
+        for (let m = 0; m < mIndices.length; m++) {
+          const mi = mIndices[m];
+          counts[mi] = 0;
+          const mesh = instanced[mi];
+          mesh.count = 0;
+          mesh.visible = false;
+        }
+        cell.group.visible = false;
+        continue;
+      }
+      for (let m = 0; m < mIndices.length; m++) counts[mIndices[m]] = 0;
+      const trees = cell.trees;
+      for (let k = 0; k < trees.length; k++) {
+        const i = trees[k];
         const l = lod[i];
         if (l === 255) continue;
         const mi = meshOf[i * 3 + l];
         const mesh = instanced[mi];
         const c = counts[mi]++;
-        mesh.instanceMatrix.array.set(mats.subarray(i * 16, i * 16 + 16), c * 16);
-        mesh.geometry.attributes.aTreeData.array.set(data.subarray(i * 4, i * 4 + 4), c * 4);
+        const dstM = mesh.instanceMatrix.array;
+        const srcM = i * 16;
+        const dstMOff = c * 16;
+        for (let j = 0; j < 16; j++) dstM[dstMOff + j] = mats[srcM + j];
+        const dstD = mesh.geometry.attributes.aTreeData.array;
+        const srcD = i * 4;
+        const dstDOff = c * 4;
+        dstD[dstDOff] = data[srcD];
+        dstD[dstDOff + 1] = data[srcD + 1];
+        dstD[dstDOff + 2] = data[srcD + 2];
+        dstD[dstDOff + 3] = data[srcD + 3];
       }
       let visible = false;
-      for (const mi of cell.meshes.values()) {
+      for (let m = 0; m < mIndices.length; m++) {
+        const mi = mIndices[m];
         const mesh = instanced[mi];
         const n = counts[mi];
         mesh.count = n;
@@ -1029,47 +1098,120 @@ function createTreeField(scene, sites, colliders = []) {
     dirtyCells.clear();
   }
 
-  // Levels from the camera position (3D distance to mid-crown), with hysteresis at every boundary
+  // Squared LOD and hysteresis thresholds eliminate per-tree Math.sqrt and temporary array allocations.
+  const NEAR_SQ = LOD_NEAR * LOD_NEAR;
+  const NEAR_LO_SQ = (LOD_NEAR - LOD_HYSTERESIS) * (LOD_NEAR - LOD_HYSTERESIS);
+  const NEAR_HI_SQ = (LOD_NEAR + LOD_HYSTERESIS) * (LOD_NEAR + LOD_HYSTERESIS);
+  const MID_SQ = LOD_MID * LOD_MID;
+  const MID_LO_SQ = (LOD_MID - LOD_HYSTERESIS) * (LOD_MID - LOD_HYSTERESIS);
+  const MID_HI_SQ = (LOD_MID + LOD_HYSTERESIS) * (LOD_MID + LOD_HYSTERESIS);
+  const MAX_DIST_LOW = MAX_DIST.map((d) => Math.min(d, LOW_CUTOFF));
+  const MAX_SQ_ALOFT = MAX_DIST.map((d) => d * d);
+  const MAX_LO_SQ_ALOFT = MAX_DIST.map((d) => (d - LOD_HYSTERESIS) * (d - LOD_HYSTERESIS));
+  const MAX_HI_SQ_ALOFT = MAX_DIST.map((d) => (d + LOD_HYSTERESIS) * (d + LOD_HYSTERESIS));
+  const MAX_SQ_LOW = MAX_DIST_LOW.map((d) => d * d);
+  const MAX_LO_SQ_LOW = MAX_DIST_LOW.map((d) => (d - LOD_HYSTERESIS) * (d - LOD_HYSTERESIS));
+  const MAX_HI_SQ_LOW = MAX_DIST_LOW.map((d) => (d + LOD_HYSTERESIS) * (d + LOD_HYSTERESIS));
+
+  function setCellUniformLod(cell, target) {
+    if (cell.uniformLod === target) return false;
+    const trees = cell.trees;
+    let cellChanged = false;
+    for (let k = 0; k < trees.length; k++) {
+      const i = trees[k];
+      if (lod[i] !== target) {
+        lod[i] = target;
+        cellChanged = true;
+      }
+    }
+    cell.uniformLod = target;
+    if (cellChanged) dirtyCells.add(cell);
+    return cellChanged;
+  }
+
+  // Cell-hierarchical LOD update (3D distance to mid-crown) with exact hysteresis at every boundary.
   const last = new V3(Infinity, Infinity, Infinity);
   const cam = new V3();
   function update(position) {
     cam.copy(position);
     if (cam.distanceToSquared(last) < 16) return false;
     last.copy(cam);
-    const low = cam.y < 40;
+    const camX = cam.x, camY = cam.y, camZ = cam.z;
+    const low = camY < 40;
+    const maxSq = low ? MAX_SQ_LOW : MAX_SQ_ALOFT;
+    const maxLoSq = low ? MAX_LO_SQ_LOW : MAX_LO_SQ_ALOFT;
+    const maxHiSq = low ? MAX_HI_SQ_LOW : MAX_HI_SQ_ALOFT;
     let changed = false;
-    for (let i = 0; i < N; i++) {
-      const dx = px[i] - cam.x;
-      const dy = py[i] - cam.y;
-      const dz = pz[i] - cam.z;
-      const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      const maxD = low ? Math.min(MAX_DIST[tier[i]], LOW_CUTOFF) : MAX_DIST[tier[i]];
-      // levels 0-2, 3 = hidden; next to a boundary a tree keeps the level it has
-      const curL = lod[i] === 255 ? 3 : lod[i];
-      let nextL = d < LOD_NEAR ? 0 : d < LOD_MID ? 1 : d < maxD ? 2 : 3;
-      if (Math.abs(nextL - curL) === 1) {
-        const edge = [LOD_NEAR, LOD_MID, maxD][Math.min(nextL, curL)];
-        if (Math.abs(d - edge) < LOD_HYSTERESIS) nextL = curL;
+
+    for (let ci = 0; ci < cellList.length; ci++) {
+      const cell = cellList[ci];
+      const cdx = cell.cx - camX;
+      const cdy = cell.cy - camY;
+      const cdz = cell.cz - camZ;
+      const centerDist = Math.sqrt(cdx * cdx + cdy * cdy + cdz * cdz);
+      const minD = centerDist - cell.radius;
+      const maxDCell = centerDist + cell.radius;
+      const cellMaxCutoff = low ? cell.maxCutoffLow : cell.maxCutoffAloft;
+
+      // Fast-path cells lying wholly outside the cutoff or wholly inside a single interior LOD band.
+      if (minD >= cellMaxCutoff + LOD_HYSTERESIS) {
+        if (setCellUniformLod(cell, 255)) changed = true;
+        continue;
       }
-      const next = nextL === 3 ? 255 : nextL;
-      if (next !== lod[i]) {
-        lod[i] = next;
-        dirtyCells.add(cellOf[i]);
+      if (maxDCell < LOD_NEAR - LOD_HYSTERESIS) {
+        if (setCellUniformLod(cell, 0)) changed = true;
+        continue;
+      }
+      if (minD >= LOD_NEAR + LOD_HYSTERESIS && maxDCell < LOD_MID - LOD_HYSTERESIS) {
+        if (setCellUniformLod(cell, 1)) changed = true;
+        continue;
+      }
+      const cellMinCutoff = low ? cell.minCutoffLow : cell.minCutoffAloft;
+      if (minD >= LOD_MID + LOD_HYSTERESIS && maxDCell < cellMinCutoff - LOD_HYSTERESIS) {
+        if (setCellUniformLod(cell, 2)) changed = true;
+        continue;
+      }
+
+      // Only cells straddling an LOD / hysteresis boundary evaluate per-tree squared distances.
+      const trees = cell.trees;
+      let cellChanged = false;
+      let firstLod = 0;
+      let allSame = true;
+      for (let k = 0; k < trees.length; k++) {
+        const i = trees[k];
+        const dx = px[i] - camX;
+        const dy = py[i] - camY;
+        const dz = pz[i] - camZ;
+        const d2 = dx * dx + dy * dy + dz * dz;
+        const t = tier[i];
+        const cur = lod[i];
+        const curL = cur === 255 ? 3 : cur;
+        let nextL = d2 < NEAR_SQ ? 0 : d2 < MID_SQ ? 1 : d2 < maxSq[t] ? 2 : 3;
+        if (nextL - curL === 1) {
+          const hiSq = curL === 0 ? NEAR_HI_SQ : curL === 1 ? MID_HI_SQ : maxHiSq[t];
+          if (d2 < hiSq) nextL = curL;
+        } else if (curL - nextL === 1) {
+          const loSq = nextL === 0 ? NEAR_LO_SQ : nextL === 1 ? MID_LO_SQ : maxLoSq[t];
+          if (d2 > loSq) nextL = curL;
+        }
+        const next = nextL === 3 ? 255 : nextL;
+        if (next !== cur) {
+          lod[i] = next;
+          cellChanged = true;
+        }
+        if (k === 0) firstLod = next;
+        else if (next !== firstLod) allSame = false;
+      }
+      cell.uniformLod = allSame ? firstLod : -1;
+      if (cellChanged) {
+        dirtyCells.add(cell);
         changed = true;
       }
     }
+
     if (changed) rebuild();
     return changed;
   }
-
-  // Follow the view camera of every scene render (shadow cascades are orthographic and keep the view's levels)
-  const viewPos = new V3();
-  const prevBeforeRender = scene.onBeforeRender;
-  scene.onBeforeRender = function (renderer, scn, camera, target) {
-    prevBeforeRender.call(this, renderer, scn, camera, target);
-    if (camera.isOrthographicCamera === true || camera.isArrayCamera === true) return;
-    update(viewPos.setFromMatrixPosition(camera.matrixWorld));
-  };
 
   // Levels for the start-up view (Midtown, 5th Ave), so the precompile pass sees the tree meshes
   update(new V3(0, 10, 140));

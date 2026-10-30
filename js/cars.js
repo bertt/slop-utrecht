@@ -1179,7 +1179,124 @@ function carStyleCode({ livery = 0, metallic = 0, trim = 0, wheel = 0 } = {}) {
 }
 
 const _carMaterialCache = new Map();
+const _carWheelMaterialCache = new Map();
 let _carPlateTexture;
+
+// Shared procedural alloy rim, spoke, brake-rotor & tyre rubber evaluation used by both `createLoftedCarMaterial`
+// (for highway cars & >90 m proxies) and `createCarWheelMaterial` (for <90 m 3D spinning wheels), keeping near/far
+// wheel appearance identical across the LOD boundary.
+function evalAlloyColor(wheelVec, rNorm, fwRing, fwSpoke, isPolice, isBlackout, wheelCode) {
+  const one = float(1.0);
+  const fadeMed = (w) => smoothstep(0.042, 0.012, w);
+  const wAngle = atan(wheelVec.y, wheelVec.x);
+  const inSpokeZone = smoothstep(0.14, 0.18, rNorm).mul(smoothstep(0.63, 0.59, rNorm));
+  const wSel1 = step(abs(wheelCode.sub(1.0)), 0.25);
+  const wSel2 = step(abs(wheelCode.sub(2.0)), 0.25);
+  const spokeVal = float(0.0).toVar();
+  If(isPolice.greaterThan(0.5), () => {
+    const steelHoles = smoothstep(0.048, 0.028, abs(rNorm.sub(0.44))).mul(smoothstep(0.2, 0.5, cos(wAngle.mul(10.0))));
+    spokeVal.assign(one.sub(steelHoles));
+  }).ElseIf(wSel2.greaterThan(0.5), () => {
+    const fork = mix(float(0.62), float(0.22), smoothstep(0.34, 0.56, rNorm));
+    spokeVal.assign(smoothstep(0.26, 0.1, abs(cos(wAngle.mul(7.0)).sub(fork))));
+  }).ElseIf(wSel1.greaterThan(0.5), () => {
+    spokeVal.assign(smoothstep(0.32, 0.62, cos(wAngle.mul(10.0).add(rNorm.mul(2.2)))));
+  }).Else(() => {
+    const c5 = abs(cos(wAngle.mul(5.0)));
+    spokeVal.assign(smoothstep(0.54, 0.68, c5).mul(one.sub(smoothstep(0.86, 0.94, c5).mul(smoothstep(0.24, 0.34, rNorm)))));
+  });
+  const spokes = mix(float(0.55), spokeVal, fadeMed(fwSpoke)).mul(inSpokeZone);
+  const rimRing = smoothstep(0.59, 0.62, rNorm).mul(smoothstep(0.695, 0.675, rNorm));
+  const centerHub = smoothstep(0.2, 0.16, rNorm);
+  const lugHoles = smoothstep(0.145, 0.115, rNorm)
+    .mul(smoothstep(0.08, 0.105, rNorm))
+    .mul(smoothstep(0.4, 0.7, cos(wAngle.mul(5.0))))
+    .mul(fadeMed(max(fwRing, fwSpoke)));
+  const centerCap = smoothstep(0.075, 0.055, rNorm).mul(one.sub(isPolice));
+  const alloyMetal = clamp(max(spokes, max(rimRing, centerHub)).sub(max(lugHoles.mul(0.85), centerCap.mul(0.75))), 0.0, 1.0);
+  const brakeDisc = smoothstep(0.2, 0.24, rNorm).mul(smoothstep(0.5, 0.46, rNorm)).mul(one.sub(alloyMetal));
+  const brakeCaliper = brakeDisc.mul(smoothstep(0.15, 0.25, wheelVec.x)).mul(smoothstep(0.05, 0.15, wheelVec.y));
+  const wheelFinish = mix(
+    mix(color(0xd8e0e8), color(0x4a5058), max(isBlackout, step(abs(wheelCode.sub(3.0)), 0.25))),
+    color(0x181b1f),
+    isPolice.mul(one.sub(centerHub))
+  );
+  const rotorCol = mix(mix(color(0x0c0f13), color(0x3e444b), brakeDisc), color(0x8a1c20), brakeCaliper);
+  return mix(rotorCol, wheelFinish, alloyMetal);
+}
+
+function evalTyreColor(rNorm, fwRing) {
+  const sidewallRib = smoothstep(0.018, 0.004, abs(rNorm.sub(0.8))).mul(0.06).mul(smoothstep(0.018, 0.005, fwRing));
+  const tyreShade = smoothstep(0.88, 0.96, rNorm).mul(-0.14).add(0.92).add(sidewallRib);
+  return color(0x17191c).mul(tyreShade);
+}
+
+/**
+ * Lightweight TSL material for 3D steerable/spinning car wheels (`buildSteerableWheelGeo`).
+ * Instanced street-traffic wheels read per-instance `wheelStyle` (`carStyleCode` float); standalone player wheels
+ * bake a fixed `style` code without compiling or evaluating body/window/lamp/plate graphs.
+ */
+function createCarWheelMaterial({ instanced = false, style = 0, wheelRadius = BODY_SPECS.sedan.wheelRadius } = {}) {
+  const cacheKey = `${instanced ? 'instanced' : `fixed_${style}`}_${wheelRadius}`;
+  if (_carWheelMaterialCache.has(cacheKey)) {
+    return _carWheelMaterialCache.get(cacheKey);
+  }
+
+  let isPolice, isBlackout, wheelCode;
+  if (instanced) {
+    const wCode = attribute('wheelStyle', 'float');
+    const vWheel = varying(
+      vertexStage(
+        vec3(
+          step(abs(floor(fract(wCode.div(8.0)).mul(8.0).add(0.5)).sub(1.0)), 0.25),
+          step(abs(floor(fract(floor(wCode.div(16.0).add(0.01)).mul(0.25)).mul(4.0).add(0.5)).sub(2.0)), 0.25),
+          floor(wCode.div(64.0).add(0.01))
+        )
+      )
+    );
+    isPolice = vWheel.x;
+    isBlackout = vWheel.y;
+    wheelCode = vWheel.z;
+  } else {
+    const s = style | 0;
+    isPolice = float((s & 7) === 1 ? 1.0 : 0.0);
+    isBlackout = float(((s >> 4) & 3) === 2 ? 1.0 : 0.0);
+    wheelCode = float((s >> 6) & 3);
+  }
+
+  const p = attribute('position', 'vec3');
+  const partId = attribute('partId', 'float');
+  const isAlloy = step(abs(partId.sub(CAR_PARTS.ALLOY)), 0.25);
+  const isTyre = step(abs(partId.sub(CAR_PARTS.TYRE)), 0.25);
+  const invR = float(1 / wheelRadius);
+
+  const colorFn = Fn(() => {
+    const outCol = vec3(color(0x181b1f)).toVar();
+    const wheelVec = vec2(p.z, p.y);
+    const wheelDist = length(wheelVec);
+    const rNorm = wheelDist.mul(invR);
+    const fwZY = max(vec2(fwidth(p.z), fwidth(p.y)), vec2(0.0005)).toVar();
+    const wheelDir = wheelVec.div(max(wheelDist, 0.0001));
+    const fwRing = abs(wheelDir.x).mul(fwZY.x).add(abs(wheelDir.y).mul(fwZY.y));
+    const fwSpoke = abs(wheelDir.y).mul(fwZY.x).add(abs(wheelDir.x).mul(fwZY.y));
+
+    If(isAlloy.greaterThan(0.5), () => {
+      outCol.assign(evalAlloyColor(wheelVec, rNorm, fwRing, fwSpoke, isPolice, isBlackout, wheelCode));
+    }).ElseIf(isTyre.greaterThan(0.5), () => {
+      outCol.assign(evalTyreColor(rNorm, fwRing));
+    });
+    return outCol;
+  });
+
+  const mat = new THREE.MeshStandardNodeMaterial();
+  mat.envMapIntensity = 1.35;
+  mat.colorNode = colorFn();
+  mat.roughnessNode = mix(float(0.78), mix(float(0.22), float(0.52), isPolice), isAlloy);
+  mat.metalnessNode = mix(float(0.04), mix(float(0.84), float(0.22), isPolice), isAlloy);
+
+  _carWheelMaterialCache.set(cacheKey, mat);
+  return mat;
+}
 
 // One small generated atlas serves every rear plate (3 Empire Gold + 1 Excelsior White), with mipmaps for distant traffic.
 function carPlateTexture() {
@@ -1664,46 +1781,9 @@ function createLoftedCarMaterial(spec, fixedColorHex = null) {
       );
       outCol.assign(mix(wCol, color(0x14171a), rearWiper));
     }).ElseIf(isAlloyFace.greaterThan(0.5), () => {
-      // Evaluate atan2 and ONLY the active wheel spoke pattern on alloy fragments
-      const wAngle = atan(wheelVec.y, wheelVec.x);
-      const inSpokeZone = smoothstep(0.14, 0.18, rNorm).mul(smoothstep(0.63, 0.59, rNorm));
-      const wSel1 = step(abs(wheelCode.sub(1.0)), 0.25);
-      const wSel2 = step(abs(wheelCode.sub(2.0)), 0.25);
-      const spokeVal = float(0.0).toVar();
-      If(isPolice.greaterThan(0.5), () => {
-        const steelHoles = smoothstep(0.048, 0.028, abs(rNorm.sub(0.44))).mul(smoothstep(0.2, 0.5, cos(wAngle.mul(10.0))));
-        spokeVal.assign(one.sub(steelHoles));
-      }).ElseIf(wSel2.greaterThan(0.5), () => {
-        const fork = mix(float(0.62), float(0.22), smoothstep(0.34, 0.56, rNorm));
-        spokeVal.assign(smoothstep(0.26, 0.1, abs(cos(wAngle.mul(7.0)).sub(fork))));
-      }).ElseIf(wSel1.greaterThan(0.5), () => {
-        spokeVal.assign(smoothstep(0.32, 0.62, cos(wAngle.mul(10.0).add(rNorm.mul(2.2)))));
-      }).Else(() => {
-        const c5 = abs(cos(wAngle.mul(5.0)));
-        spokeVal.assign(smoothstep(0.54, 0.68, c5).mul(one.sub(smoothstep(0.86, 0.94, c5).mul(smoothstep(0.24, 0.34, rNorm)))));
-      });
-      const spokes = mix(float(0.55), spokeVal, fadeMed(fwSpoke)).mul(inSpokeZone);
-      const rimRing = smoothstep(0.59, 0.62, rNorm).mul(smoothstep(0.695, 0.675, rNorm));
-      const centerHub = smoothstep(0.2, 0.16, rNorm);
-      const lugHoles = smoothstep(0.145, 0.115, rNorm)
-        .mul(smoothstep(0.08, 0.105, rNorm))
-        .mul(smoothstep(0.4, 0.7, cos(wAngle.mul(5.0))))
-        .mul(fadeMed(max(fwRing, fwSpoke)));
-      const centerCap = smoothstep(0.075, 0.055, rNorm).mul(one.sub(isPolice));
-      const alloyMetal = clamp(max(spokes, max(rimRing, centerHub)).sub(max(lugHoles.mul(0.85), centerCap.mul(0.75))), 0.0, 1.0);
-      const brakeDisc = smoothstep(0.2, 0.24, rNorm).mul(smoothstep(0.5, 0.46, rNorm)).mul(one.sub(alloyMetal));
-      const brakeCaliper = brakeDisc.mul(smoothstep(0.15, 0.25, wheelVec.x)).mul(smoothstep(0.05, 0.15, wheelVec.y));
-      const wheelFinish = mix(
-        mix(color(0xd8e0e8), color(0x4a5058), max(isBlackout, step(abs(wheelCode.sub(3.0)), 0.25))),
-        color(0x181b1f),
-        isPolice.mul(one.sub(centerHub))
-      );
-      const rotorCol = mix(mix(color(0x0c0f13), color(0x3e444b), brakeDisc), color(0x8a1c20), brakeCaliper);
-      outCol.assign(mix(rotorCol, wheelFinish, alloyMetal));
+      outCol.assign(evalAlloyColor(wheelVec, rNorm, fwRing, fwSpoke, isPolice, isBlackout, wheelCode));
     }).ElseIf(isTyreRubber.greaterThan(0.5), () => {
-      const sidewallRib = smoothstep(0.018, 0.004, abs(rNorm.sub(0.8))).mul(0.06).mul(fadeFine(fwRing));
-      const tyreShade = smoothstep(0.88, 0.96, rNorm).mul(-0.14).add(0.92).add(sidewallRib);
-      outCol.assign(color(0x17191c).mul(tyreShade));
+      outCol.assign(evalTyreColor(rNorm, fwRing));
     }).ElseIf(isMirror.greaterThan(0.5), () => {
       const mirrorGlass = smoothstep(0.45, 0.65, n.z.negate());
       const mirrorTurn = smoothstep(0.05, 0.2, n.z)
@@ -1821,6 +1901,7 @@ export {
   buildCarGeometry,
   buildCarProxyGeometry,
   createLoftedCarMaterial,
+  createCarWheelMaterial,
   carStyleCode,
   buildLightbarGeometry,
   createLightbarMaterial,

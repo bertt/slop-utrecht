@@ -16,6 +16,7 @@ class Node {
   get x() { return new Node(this.values[0]); }
   get y() { return new Node(this.values[1]); }
   get z() { return new Node(this.values[2]); }
+  add(v) { return binary(this, v, (a, b) => a + b); }
   sub(v) { return binary(this, v, (a, b) => a - b); }
   mul(v) { return binary(this, v, (a, b) => a * b); }
   negate() { return this.mul(-1); }

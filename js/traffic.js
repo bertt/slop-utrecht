@@ -10,6 +10,7 @@ import {
   buildCarGeometry,
   buildCarProxyGeometry,
   buildSteerableWheelGeo,
+  createCarWheelMaterial,
   createLoftedCarMaterial,
   carStyleCode,
   buildLightbarGeometry,
@@ -182,7 +183,10 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
   // Every body kind shares one 3D wheel model, instanced separately and scaled to the kind's wheel radius
   const carWheelLeftGeo = buildSteerableWheelGeo(BODY_SPECS.sedan, -1);
   const carWheelRightGeo = buildSteerableWheelGeo(BODY_SPECS.sedan, 1);
-  const carWheelMat = createLoftedCarMaterial(BODY_SPECS.sedan, 0xffbe14);
+  const carWheelStyles = new THREE.InstancedBufferAttribute(new Float32Array(NUM_CARS * 2), 1);
+  carWheelLeftGeo.setAttribute('wheelStyle', carWheelStyles);
+  carWheelRightGeo.setAttribute('wheelStyle', carWheelStyles);
+  const carWheelMat = createCarWheelMaterial({ instanced: true });
 
   const taxiYellow = new THREE.Color(0xffbe14);
   const boroGreen = new THREE.Color(0x5cae3e);
@@ -324,6 +328,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
 
   const carWheelLeftInst = new THREE.InstancedMesh(carWheelLeftGeo, carWheelMat, NUM_CARS * 2);
   const carWheelRightInst = new THREE.InstancedMesh(carWheelRightGeo, carWheelMat, NUM_CARS * 2);
+  carWheelRightInst.userData.sharesPipelineWith = carWheelLeftInst;
 
   // 3D Collision Spark & Debris Particle Pool
   const MAX_SPARKS = 120;
@@ -1686,6 +1691,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
   const CAR_PROXY_DISTANCE = 90;
   const dirtyPaint = new Set();
   const dirtyState = new Set();
+  let dirtyWheelStyles = false;
   const litVehicles = [];
   let litVehicleCount = 0;
   let wheelCars = 0;
@@ -1804,6 +1810,12 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     }
 
     if (near) {
+      const wi = wheelCars * 2;
+      const ws = carWheelStyles.array;
+      if (ws[wi] !== c.style || ws[wi + 1] !== c.style) {
+        ws[wi] = ws[wi + 1] = c.style;
+        dirtyWheelStyles = true;
+      }
       placeWheels(c, wheelCars++, rotY, c.roll, spec.wheelRadius, spec.wheelX, spec.wheelZ, carWheelLeftInst, carWheelRightInst);
     }
   }
@@ -2028,6 +2040,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     }
     buildOccupancy();
     for (const m of bodyMeshes) m.count = 0;
+    dirtyWheelStyles = false;
     litVehicleCount = 0;
     wheelCars = 0;
     visibleCars = 0;
@@ -2095,6 +2108,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     };
     syncInst(carWheelLeftInst, wheelCars * 2);
     syncInst(carWheelRightInst, wheelCars * 2);
+    if (dirtyWheelStyles && wheelCars > 0) flagRange(carWheelStyles, wheelCars * 2);
     syncInst(policeLightbars.sedan, policeDrawn.sedan);
     syncInst(policeLightbars.suv, policeDrawn.suv);
     syncInst(carShadowInst, visibleCars);

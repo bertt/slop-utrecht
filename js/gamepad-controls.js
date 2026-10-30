@@ -7,6 +7,11 @@ function axis(value) {
   return Number.isFinite(value) ? Math.max(-1, Math.min(1, value)) : 0;
 }
 
+function steeringAxis(value) {
+  const v = axis(value);
+  return Math.sign(v) * Math.max(0, (Math.abs(v) - DEAD_ZONE) / (1 - DEAD_ZONE));
+}
+
 function stick(pad, offset) {
   const x = axis(pad.axes?.[offset]), y = axis(pad.axes?.[offset + 1]);
   const distance = Math.hypot(x, y);
@@ -142,11 +147,13 @@ class GamepadControls {
     if (revision !== this.revision) return;
     if (recenter) this.camera.resetOrbit();
 
-    const movement = stick(pad, 0), look = stick(pad, 2);
     const mode = this.controller.activeMode;
+    const driving = mode === 'car' || mode === 'cyclist' || mode === 'cargobike';
+    const movement = driving ? { x: steeringAxis(pad.axes?.[0]), y: 0 } : stick(pad, 0);
+    const look = stick(pad, 2);
     let drive = -movement.y;
     let vertical = 0;
-    if (mode === 'car' || mode === 'cyclist' || mode === 'cargobike') {
+    if (driving) {
       drive = Math.max(0, drive, buttonValue(pad, 7)) - Math.max(0, -drive, buttonValue(pad, 6));
     } else if (mode === 'helicopter') {
       vertical = buttonValue(pad, 7) - buttonValue(pad, 6);
